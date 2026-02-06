@@ -21,11 +21,11 @@ describe('OCIF', () => {
 		})
 	})
 
-	describe('OCIF v0.5 specification compliance', () => {
+	describe('OCIF v0.6 specification compliance', () => {
 		describe('Header (ocif property)', () => {
 			it('should accept correct OCIF version header', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [],
 				})
 
@@ -37,7 +37,7 @@ describe('OCIF', () => {
 		describe('Nodes structure', () => {
 			it('should support resourceFit property in nodes and create correct shapes', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'node1',
@@ -90,7 +90,7 @@ describe('OCIF', () => {
 
 			it('should support relation property in nodes and create correct shapes', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'node1',
@@ -136,7 +136,7 @@ describe('OCIF', () => {
 		describe('Resources structure', () => {
 			it('should support representations array in resources and create assets', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'image-node',
@@ -187,7 +187,7 @@ describe('OCIF', () => {
 
 			it('should support location, mimeType, and content in representations', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'img1',
@@ -249,7 +249,7 @@ describe('OCIF', () => {
 		describe('Relations structure', () => {
 			it('should support node property in relations and create bindings', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'node1',
@@ -303,13 +303,13 @@ describe('OCIF', () => {
 		describe('Schemas structure', () => {
 			it('should support all schema properties: uri, schema, location, name', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [],
 					schemas: [
 						{
 							name: '@ocif/node/rect',
-							uri: 'https://spec.canvasprotocol.org/v0.5/core/rect-node.json',
-							location: 'https://spec.canvasprotocol.org/v0.5/core/rect-node.json',
+							uri: 'https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json',
+							location: 'https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json',
 							schema: {
 								type: 'object',
 								properties: {
@@ -327,11 +327,11 @@ describe('OCIF', () => {
 		})
 	})
 
-	describe('OCIF v0.5 Extensions', () => {
+	describe('OCIF v0.6 Extensions', () => {
 		describe('Group relations', () => {
 			it('should import group relations', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'shape1',
@@ -383,7 +383,7 @@ describe('OCIF', () => {
 		describe('Path nodes', () => {
 			it('should import path nodes as draw shapes', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'path1',
@@ -421,7 +421,7 @@ describe('OCIF', () => {
 		describe('Node Transforms Extension', () => {
 			it('should import scale property from node transforms extension', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'scaled-rect',
@@ -462,7 +462,7 @@ describe('OCIF', () => {
 		describe('Text Style Extension', () => {
 			it('should import text style extension for rich text', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'text1',
@@ -513,7 +513,7 @@ describe('OCIF', () => {
 		describe('Parent-Child Relation for Frames', () => {
 			it('should import frame shapes with parent-child relations', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'frame1',
@@ -581,7 +581,7 @@ describe('OCIF', () => {
 		describe('Hyperedge Relation Import', () => {
 			it('should import hyperedge relations as multiple arrow bindings', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'node1',
@@ -636,7 +636,7 @@ describe('OCIF', () => {
 
 			it('should handle undirected hyperedge endpoints', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'node1',
@@ -689,7 +689,7 @@ describe('OCIF', () => {
 		describe('Note (Sticky Note) Support', () => {
 			it('should import note shapes with custom tldraw extension', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'note1',
@@ -734,7 +734,7 @@ describe('OCIF', () => {
 		describe('Embed Support', () => {
 			it('should import embed shapes with custom tldraw extension', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'embed1',
@@ -771,7 +771,7 @@ describe('OCIF', () => {
 		describe('Bookmark Support', () => {
 			it('should import bookmark shapes with asset references', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'bookmark1',
@@ -827,7 +827,7 @@ describe('OCIF', () => {
 		describe('Video Support', () => {
 			it('should import video shapes with resource references', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'video1',
@@ -870,7 +870,7 @@ describe('OCIF', () => {
 		describe('Highlight Support', () => {
 			it('should import highlight shapes with custom tldraw extension', () => {
 				const testOcif = JSON.stringify({
-					ocif: 'https://canvasprotocol.org/ocif/v0.5',
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
 					nodes: [
 						{
 							id: 'highlight1',
@@ -908,7 +908,7 @@ describe('OCIF', () => {
 	describe('Basic shapes import', () => {
 		it('should import a rectangle', () => {
 			const testOcif = JSON.stringify({
-				ocif: 'https://canvasprotocol.org/ocif/v0.5',
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
 				nodes: [
 					{
 						id: 'rect1',
@@ -943,7 +943,7 @@ describe('OCIF', () => {
 
 		it('should import an ellipse', () => {
 			const testOcif = JSON.stringify({
-				ocif: 'https://canvasprotocol.org/ocif/v0.5',
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
 				nodes: [
 					{
 						id: 'ellipse1',
@@ -978,7 +978,7 @@ describe('OCIF', () => {
 
 		it('should import an arrow', () => {
 			const testOcif = JSON.stringify({
-				ocif: 'https://canvasprotocol.org/ocif/v0.5',
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
 				nodes: [
 					{
 						id: 'arrow1',
@@ -1018,7 +1018,7 @@ describe('OCIF', () => {
 	describe('Complex scenarios', () => {
 		it('should handle multiple shapes', () => {
 			const testOcif = JSON.stringify({
-				ocif: 'https://canvasprotocol.org/ocif/v0.5',
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
 				nodes: [
 					{
 						id: 'rect1',
@@ -1063,7 +1063,7 @@ describe('OCIF', () => {
 
 		it('should handle empty canvas', () => {
 			const testOcif = JSON.stringify({
-				ocif: 'https://canvasprotocol.org/ocif/v0.5',
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
 				nodes: [],
 			})
 
@@ -1120,7 +1120,7 @@ describe('OCIF', () => {
 
 		it('should handle unknown shape types gracefully', () => {
 			const unknownShapeOcif = JSON.stringify({
-				ocif: 'https://canvasprotocol.org/ocif/v0.5',
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
 				nodes: [
 					{
 						id: 'shape:unknown',
@@ -1157,7 +1157,7 @@ describe('OCIF', () => {
 	describe('Representations fallback', () => {
 		it('should extract altText from plain text representations', () => {
 			const testOcif = JSON.stringify({
-				ocif: 'https://canvasprotocol.org/ocif/v0.5',
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
 				nodes: [
 					{
 						id: 'image-node',

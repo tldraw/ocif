@@ -112,7 +112,9 @@ export interface OcifSchema {
 /** @public */
 export interface OcifFile {
 	ocif: string
-	nodes: OcifNode[]
+	rootNode?: string
+	data?: Array<{ type: string; [key: string]: any }>
+	nodes?: OcifNode[]
 	relations?: OcifRelation[]
 	resources?: OcifResource[]
 	schemas?: OcifSchema[]
@@ -244,7 +246,7 @@ export async function serializeTldrawToOcif(editor: Editor): Promise<string> {
 	)
 
 	const ocifFile: OcifFile = {
-		ocif: 'https://canvasprotocol.org/ocif/v0.5',
+		ocif: 'https://canvasprotocol.org/ocif/v0.6',
 		nodes,
 		relations: relations.length > 0 ? relations : undefined,
 		resources: resources.length > 0 ? resources : undefined,
@@ -274,7 +276,7 @@ export function parseOcifFile({
 	let data: OcifFile
 	try {
 		data = JSON.parse(json)
-		if (!data.ocif || !data.nodes) {
+		if (!data.ocif) {
 			throw new Error('Invalid OCIF structure')
 		}
 	} catch (e) {
@@ -282,7 +284,7 @@ export function parseOcifFile({
 	}
 
 	// Check if OCIF version is supported
-	if (!data.ocif.includes('v0.5')) {
+	if (!data.ocif.includes('v0.6') && !data.ocif.includes('v0.5')) {
 		return Result.err({ type: 'ocifVersionNotSupported', version: data.ocif })
 	}
 
@@ -327,7 +329,7 @@ export function parseOcifFile({
 		}
 
 		// Convert OCIF nodes to TLDraw shapes
-		for (const node of data.nodes) {
+		for (const node of data.nodes ?? []) {
 			const shapeRecord = convertOcifNodeToTldrawShape(node, assetMap, altTextMap, resourceTypeMap)
 			if (shapeRecord) {
 				// Set parent if this node has a parent-child relation
@@ -348,7 +350,7 @@ export function parseOcifFile({
 				frameIds.add(parentId)
 
 				// Find the parent node to get its properties
-				const parentNode = data.nodes.find((n) => n.id === parentId)
+				const parentNode = (data.nodes ?? []).find((n) => n.id === parentId)
 				if (parentNode) {
 					const frameData = parentNode.data.find((d) => d.isFrame)
 					if (frameData) {
@@ -1877,8 +1879,8 @@ function getOcifSchemas(): OcifSchema[] {
 	return [
 		{
 			name: '@ocif/node/rect',
-			uri: 'https://spec.canvasprotocol.org/v0.5/core/rect-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/core/rect-node.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -1896,8 +1898,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/node/oval',
-			uri: 'https://spec.canvasprotocol.org/v0.5/core/oval-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/core/oval-node.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/oval-node.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/oval-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -1910,8 +1912,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/node/path',
-			uri: 'https://spec.canvasprotocol.org/v0.5/core/path-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/core/path-node.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/path-node.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/path-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -1926,8 +1928,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/node/arrow',
-			uri: 'https://spec.canvasprotocol.org/v0.5/core/arrow-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/core/arrow-node.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/arrow-node.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/arrow-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -1943,8 +1945,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/rel/edge',
-			uri: 'https://spec.canvasprotocol.org/v0.5/core/edge-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/core/edge-rel.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/edge-rel.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/edge-rel.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -1956,8 +1958,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/rel/group',
-			uri: 'https://spec.canvasprotocol.org/v0.5/core/group-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/core/group-rel.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/group-rel.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/group-rel.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2033,11 +2035,11 @@ function getOcifSchemas(): OcifSchema[] {
 				},
 			},
 		},
-		// OCIF v0.5 Extensions
+		// OCIF v0.6 Extensions
 		{
 			name: '@ocif/node/ports',
-			uri: 'https://spec.canvasprotocol.org/v0.5/extensions/ports-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/extensions/ports-node.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/ports-node.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/ports-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2048,8 +2050,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/node/transforms',
-			uri: 'https://spec.canvasprotocol.org/v0.5/extensions/transforms-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/extensions/transforms-node.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/transforms-node.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/transforms-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2063,8 +2065,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/node/textstyle',
-			uri: 'https://spec.canvasprotocol.org/v0.5/extensions/textstyle-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/extensions/textstyle-node.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/textstyle-node.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/textstyle-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2080,8 +2082,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/rel/parent-child',
-			uri: 'https://spec.canvasprotocol.org/v0.5/extensions/parent-child-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/extensions/parent-child-rel.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/parent-child-rel.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/parent-child-rel.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2095,8 +2097,8 @@ function getOcifSchemas(): OcifSchema[] {
 		},
 		{
 			name: '@ocif/rel/hyperedge',
-			uri: 'https://spec.canvasprotocol.org/v0.5/extensions/hyperedge-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.5/extensions/hyperedge-rel.json',
+			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/hyperedge-rel.json',
+			location: 'https://spec.canvasprotocol.org/v0.6/extensions/hyperedge-rel.json',
 			schema: {
 				type: 'object',
 				properties: {

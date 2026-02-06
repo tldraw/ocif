@@ -2,7 +2,7 @@
 
 [OCIF (Open Canvas Interchange Format)](https://github.com/ocwg/spec) plugin for [tldraw](https://tldraw.dev) — import and export canvases using the OCWG specification.
 
-> **Status**: Work in progress — implements OCIF v0.5
+> **Status**: Work in progress — implements OCIF v0.6
 
 ## Install
 
@@ -81,7 +81,7 @@ OcifFileParseError
 
 ## Supported OCIF features
 
-### Core (OCIF v0.5)
+### Core (OCIF v0.6)
 
 - **Nodes**: `@ocif/node/rect`, `@ocif/node/oval`, `@ocif/node/path`, `@ocif/node/arrow`
 - **Relations**: `@ocif/rel/edge`, `@ocif/rel/group`
