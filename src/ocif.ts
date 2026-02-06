@@ -176,12 +176,28 @@ export async function serializeTldrawToOcif(editor: Editor): Promise<string> {
 		}
 	}
 
-	// Convert assets to resources
+	// Collect all resource/asset IDs referenced by nodes
+	const referencedResourceIds = new Set<string>()
+	for (const node of nodes) {
+		if (node.resource) {
+			referencedResourceIds.add(node.resource)
+		}
+		// Also check data blocks for asset references (e.g. bookmarks)
+		for (const d of node.data) {
+			if (d.assetId) {
+				referencedResourceIds.add(d.assetId)
+			}
+		}
+	}
+
+	// Convert assets to resources, but only those referenced by nodes
 	for (const record of records) {
 		if (record.typeName === 'asset') {
-			const resource = await convertTldrawAssetToOcifResource(record as any, editor)
-			if (resource) {
-				resources.push(resource)
+			if (referencedResourceIds.has(record.id)) {
+				const resource = await convertTldrawAssetToOcifResource(record as any, editor)
+				if (resource) {
+					resources.push(resource)
+				}
 			}
 		}
 	}
@@ -818,8 +834,8 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 
 			break
 		}
-		case 'arrow':
-			data.push({
+		case 'arrow': {
+			const arrowData: any = {
 				type: '@ocif/node/arrow',
 				strokeColor: convertTldrawColorToHex(shape.props.color),
 				start: [shape.props.start.x, shape.props.start.y],
@@ -827,8 +843,30 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				startMarker: convertTldrawArrowheadToOcif(shape.props.arrowheadStart),
 				endMarker: convertTldrawArrowheadToOcif(shape.props.arrowheadEnd),
 				strokeWidth: convertTldrawSizeToPixels(shape.props.size),
-			})
+			}
+
+			// Add label properties if the arrow has text
+			const arrowText = renderPlaintextFromRichText(editor, shape.props.richText)
+			if (arrowText) {
+				arrowData.text = arrowText
+				arrowData.labelColor = convertTldrawColorToHex(shape.props.labelColor || 'black')
+				arrowData.labelPosition = shape.props.labelPosition ?? 0.5
+			}
+
+			data.push(arrowData)
+
+			// Add node transforms extension if shape has scale
+			if (shape.props.scale && shape.props.scale !== 1) {
+				data.push({
+					type: '@ocif/node/transforms',
+					scale: shape.props.scale,
+					rotation: 0,
+					offset: [0, 0],
+				})
+			}
+
 			break
+		}
 		case 'frame': {
 			// Frame shapes are represented as rectangles with special styling
 			data.push({
@@ -888,6 +926,17 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				growY: shape.props.growY || 0,
 				url: shape.props.url || '',
 			})
+
+			// Add node transforms extension if shape has scale
+			if (shape.props.scale && shape.props.scale !== 1) {
+				data.push({
+					type: '@ocif/node/transforms',
+					scale: shape.props.scale,
+					rotation: 0,
+					offset: [0, 0],
+				})
+			}
+
 			break
 		}
 		case 'embed': {
@@ -938,6 +987,17 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				size: convertTldrawSizeToPixels(shape.props.size),
 				isComplete: shape.props.isComplete,
 			})
+
+			// Add node transforms extension if shape has scale
+			if (shape.props.scale && shape.props.scale !== 1) {
+				data.push({
+					type: '@ocif/node/transforms',
+					scale: shape.props.scale,
+					rotation: 0,
+					offset: [0, 0],
+				})
+			}
+
 			break
 		}
 		case 'line': {
@@ -1328,8 +1388,8 @@ function convertOcifNodeToTldrawShape(
 	switch (primaryData.type) {
 		case '@ocif/node/rect':
 			// Check if this is a text node, image node, or frame
-			if (primaryData.text) {
-				// This is a text node
+			if (primaryData.text && primaryData.strokeColor === 'transparent' && primaryData.strokeWidth === 0) {
+				// This is a pure text node (transparent stroke, zero width)
 				const fontSize = textStyleExtension?.fontSizePx || primaryData.fontSize || 12
 				const fontFamily = textStyleExtension?.fontFamily || primaryData.fontFamily || 'draw'
 				const textAlign = textStyleExtension?.align || primaryData.textAlign || 'left'
@@ -1376,9 +1436,9 @@ function convertOcifNodeToTldrawShape(
 				// This is a frame node - will be handled separately
 				return null
 			} else {
-				// Regular rectangle
+				// Regular rectangle (or other geo shapes like diamond, star, etc.)
 				const props: any = {
-					geo: 'rectangle',
+					geo: primaryData.geoType || 'rectangle',
 					color: convertHexToTldrawColor(primaryData.strokeColor),
 					fill: convertHexToTldrawFill(primaryData.fillColor),
 					size: convertPixelsToTldrawSize(primaryData.strokeWidth),
@@ -1386,12 +1446,14 @@ function convertOcifNodeToTldrawShape(
 					h,
 					growY: 0,
 					font: 'draw',
-					align: 'middle',
+					align: primaryData.textAlign || 'middle',
 					verticalAlign: 'middle',
 					url: '',
 					dash: 'draw',
-					labelColor: 'black',
-					richText: toRichText(''),
+					labelColor: primaryData.textColor
+						? convertHexToTldrawColor(primaryData.textColor)
+						: 'black',
+					richText: primaryData.text ? toRichText(primaryData.text) : toRichText(''),
 				}
 
 				// Always add scale property (tldraw schema requires it)
@@ -1471,9 +1533,11 @@ function convertOcifNodeToTldrawShape(
 					start: { x: primaryData.start[0], y: primaryData.start[1] },
 					end: { x: primaryData.end[0], y: primaryData.end[1] },
 					bend: 0,
-					richText: toRichText(''),
-					labelPosition: 0.5,
-					labelColor: 'black',
+					richText: primaryData.text ? toRichText(primaryData.text) : toRichText(''),
+					labelPosition: primaryData.labelPosition ?? 0.5,
+					labelColor: primaryData.labelColor
+						? convertHexToTldrawColor(primaryData.labelColor)
+						: 'black',
 					fill: 'none',
 					dash: 'draw',
 					font: 'draw',
@@ -1940,6 +2004,9 @@ function getOcifSchemas(): OcifSchema[] {
 					startMarker: { type: 'string' },
 					endMarker: { type: 'string' },
 					strokeWidth: { type: 'number' },
+					text: { type: 'string' },
+					labelColor: { type: 'string' },
+					labelPosition: { type: 'number' },
 				},
 			},
 		},

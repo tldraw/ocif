@@ -1199,4 +1199,482 @@ describe('OCIF', () => {
 			}
 		})
 	})
+
+	describe('Geo shape geoType round-trip (diamond, star, etc.)', () => {
+		it('should deserialize a diamond geo shape via geoType', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'diamond1',
+						position: [0, 0],
+						size: [100, 100],
+						data: [
+							{
+								type: '@ocif/node/rect',
+								strokeColor: '#0066CC',
+								fillColor: '#0066CC',
+								strokeWidth: 4,
+								geoType: 'diamond',
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const shape = shapes[0] as any
+				expect(shape.type).toBe('geo')
+				expect(shape.props.geo).toBe('diamond')
+			}
+		})
+
+		it('should deserialize a star geo shape via geoType', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'star1',
+						position: [0, 0],
+						size: [100, 100],
+						data: [
+							{
+								type: '@ocif/node/rect',
+								strokeColor: '#FF0000',
+								fillColor: '#FF0000',
+								strokeWidth: 2,
+								geoType: 'star',
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const shape = shapes[0] as any
+				expect(shape.type).toBe('geo')
+				expect(shape.props.geo).toBe('star')
+			}
+		})
+
+		it('should deserialize triangle, hexagon, pentagon, octagon, cloud via geoType', () => {
+			const geoTypes = ['triangle', 'hexagon', 'pentagon', 'octagon', 'cloud']
+
+			for (const geoType of geoTypes) {
+				const testOcif = JSON.stringify({
+					ocif: 'https://canvasprotocol.org/ocif/v0.6',
+					nodes: [
+						{
+							id: `${geoType}1`,
+							position: [0, 0],
+							size: [100, 100],
+							data: [
+								{
+									type: '@ocif/node/rect',
+									strokeColor: '#000000',
+									fillColor: 'transparent',
+									strokeWidth: 2,
+									geoType,
+								},
+							],
+						},
+					],
+				})
+
+				const parseResult = parseOcifFile({ json: testOcif, schema })
+				expect(parseResult.ok).toBe(true)
+				if (parseResult.ok) {
+					const shapes = Array.from(parseResult.value.allRecords()).filter(
+						(r) => r.typeName === 'shape'
+					)
+					expect(shapes).toHaveLength(1)
+					const shape = shapes[0] as any
+					expect(shape.type).toBe('geo')
+					expect(shape.props.geo).toBe(geoType)
+				}
+			}
+		})
+
+		it('should default to rectangle when no geoType is set', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'rect1',
+						position: [0, 0],
+						size: [100, 100],
+						data: [
+							{
+								type: '@ocif/node/rect',
+								strokeColor: '#000000',
+								fillColor: 'transparent',
+								strokeWidth: 2,
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const shape = shapes[0] as any
+				expect(shape.type).toBe('geo')
+				expect(shape.props.geo).toBe('rectangle')
+			}
+		})
+	})
+
+	describe('Arrow labels', () => {
+		it('should deserialize arrow with text label', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'arrow1',
+						position: [0, 0],
+						size: [100, 50],
+						data: [
+							{
+								type: '@ocif/node/arrow',
+								strokeColor: '#000000',
+								start: [0, 0],
+								end: [100, 50],
+								startMarker: 'none',
+								endMarker: 'arrowhead',
+								strokeWidth: 4,
+								text: 'Hello Label',
+								labelColor: '#FF0000',
+								labelPosition: 0.3,
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const arrow = shapes[0] as any
+				expect(arrow.type).toBe('arrow')
+				// richText should contain the label text
+				expect(arrow.props.richText).toBeDefined()
+				expect(arrow.props.labelColor).toBe('red')
+				expect(arrow.props.labelPosition).toBe(0.3)
+			}
+		})
+
+		it('should deserialize arrow without label and default to empty text', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'arrow2',
+						position: [0, 0],
+						size: [100, 50],
+						data: [
+							{
+								type: '@ocif/node/arrow',
+								strokeColor: '#000000',
+								start: [0, 0],
+								end: [100, 50],
+								startMarker: 'none',
+								endMarker: 'arrowhead',
+								strokeWidth: 4,
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const arrow = shapes[0] as any
+				expect(arrow.type).toBe('arrow')
+				expect(arrow.props.labelPosition).toBe(0.5) // default
+				expect(arrow.props.labelColor).toBe('black') // default
+			}
+		})
+	})
+
+	describe('Geo shapes with text labels', () => {
+		it('should deserialize a rectangle with text as a geo shape (not text)', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'labeled-rect',
+						position: [0, 0],
+						size: [200, 100],
+						data: [
+							{
+								type: '@ocif/node/rect',
+								strokeColor: '#0066CC',
+								fillColor: '#0066CC',
+								strokeWidth: 4,
+								text: 'Hello World',
+								textColor: '#FF0000',
+								textAlign: 'middle',
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const shape = shapes[0] as any
+				// Should be a geo shape, NOT a text shape
+				expect(shape.type).toBe('geo')
+				expect(shape.props.geo).toBe('rectangle')
+				expect(shape.props.color).toBe('blue')
+				expect(shape.props.fill).toBe('solid')
+				expect(shape.props.labelColor).toBe('red')
+				// richText should contain the label
+				expect(shape.props.richText).toBeDefined()
+			}
+		})
+
+		it('should still deserialize a pure text node as text shape', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'text1',
+						position: [0, 0],
+						size: [200, 50],
+						data: [
+							{
+								type: '@ocif/node/rect',
+								strokeColor: 'transparent',
+								fillColor: 'transparent',
+								strokeWidth: 0,
+								text: 'Just text',
+								textColor: '#000000',
+								fontSize: 16,
+							},
+							{
+								type: '@ocif/node/textstyle',
+								fontSizePx: 16,
+								fontFamily: 'sans-serif',
+								color: '#000000',
+								align: 'left',
+								bold: false,
+								italic: false,
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const shape = shapes[0] as any
+				expect(shape.type).toBe('text')
+			}
+		})
+
+		it('should deserialize a diamond with text label as geo shape', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'labeled-diamond',
+						position: [0, 0],
+						size: [150, 150],
+						data: [
+							{
+								type: '@ocif/node/rect',
+								strokeColor: '#00AA00',
+								fillColor: '#00AA00',
+								strokeWidth: 2,
+								geoType: 'diamond',
+								text: 'Diamond Label',
+								textColor: '#000000',
+								textAlign: 'middle',
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const shape = shapes[0] as any
+				expect(shape.type).toBe('geo')
+				expect(shape.props.geo).toBe('diamond')
+				expect(shape.props.color).toBe('green')
+				expect(shape.props.richText).toBeDefined()
+			}
+		})
+	})
+
+	describe('Scale serialization for arrow, note, highlight', () => {
+		it('should deserialize arrow with scale from transforms extension', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'scaled-arrow',
+						position: [0, 0],
+						size: [100, 50],
+						data: [
+							{
+								type: '@ocif/node/arrow',
+								strokeColor: '#000000',
+								start: [0, 0],
+								end: [100, 50],
+								startMarker: 'none',
+								endMarker: 'arrowhead',
+								strokeWidth: 4,
+							},
+							{
+								type: '@ocif/node/transforms',
+								scale: 1.5,
+								rotation: 0,
+								offset: [0, 0],
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const arrow = shapes[0] as any
+				expect(arrow.type).toBe('arrow')
+				expect(arrow.props.scale).toBe(1.5)
+			}
+		})
+
+		it('should deserialize note with scale from transforms extension', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'scaled-note',
+						position: [0, 0],
+						size: [200, 200],
+						data: [
+							{
+								type: '@tldraw/node/note',
+								text: 'Scaled note',
+								color: '#FFDD00',
+								labelColor: '#000000',
+								fontSizePx: 16,
+								fontFamily: 'draw',
+								align: 'middle',
+								verticalAlign: 'middle',
+								growY: 0,
+								url: '',
+							},
+							{
+								type: '@ocif/node/transforms',
+								scale: 2.0,
+								rotation: 0,
+								offset: [0, 0],
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const note = shapes[0] as any
+				expect(note.type).toBe('note')
+				expect(note.props.scale).toBe(2.0)
+			}
+		})
+
+		it('should deserialize highlight with scale from transforms extension', () => {
+			const testOcif = JSON.stringify({
+				ocif: 'https://canvasprotocol.org/ocif/v0.6',
+				nodes: [
+					{
+						id: 'scaled-highlight',
+						position: [0, 0],
+						size: [200, 10],
+						data: [
+							{
+								type: '@tldraw/node/highlight',
+								path: 'M0,0 L100,10 L200,0',
+								color: '#FFDD00',
+								size: 8,
+								isComplete: true,
+							},
+							{
+								type: '@ocif/node/transforms',
+								scale: 3.0,
+								rotation: 0,
+								offset: [0, 0],
+							},
+						],
+					},
+				],
+			})
+
+			const parseResult = parseOcifFile({ json: testOcif, schema })
+			expect(parseResult.ok).toBe(true)
+			if (parseResult.ok) {
+				const shapes = Array.from(parseResult.value.allRecords()).filter(
+					(r) => r.typeName === 'shape'
+				)
+				expect(shapes).toHaveLength(1)
+				const highlight = shapes[0] as any
+				expect(highlight.type).toBe('highlight')
+				expect(highlight.props.scale).toBe(3.0)
+			}
+		})
+	})
 })
