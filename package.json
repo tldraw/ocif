@@ -1,0 +1,63 @@
+{
+	"name": "tldraw-ocif",
+	"version": "0.1.0",
+	"description": "OCIF (Open Canvas Interchange Format) plugin for tldraw — import and export canvases using the OCWG spec",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		}
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"scripts": {
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "tsc --noEmit",
+		"prepublishOnly": "npm run build"
+	},
+	"peerDependencies": {
+		"tldraw": "^4.3.1"
+	},
+	"devDependencies": {
+		"@types/react": "19.2.13",
+		"@types/react-dom": "19.2.3",
+		"jsdom": "28.0.0",
+		"react": "19.2.4",
+		"react-dom": "19.2.4",
+		"tldraw": "4.3.1",
+		"tsup": "^8.0.0",
+		"typescript": "^5.7.0",
+		"vitest": "^3.0.0"
+	},
+	"keywords": [
+		"ocif",
+		"ocwg",
+		"tldraw",
+		"canvas",
+		"interchange",
+		"import",
+		"export",
+		"open-canvas"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/tldraw/ocif"
+	}
+}
