@@ -1,5 +1,5 @@
 {
-  "ocif": "https://canvasprotocol.org/ocif/v0.6",
+  "ocif": "https://canvasprotocol.org/ocif/v0.7.0",
   "nodes": [
     {
       "id": "shape:SKQ4o_JpBhbd6CopU7i3-",
@@ -34,7 +34,7 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/rect",
+          "type": "@ocif/rect",
           "strokeColor": "#66CCFF",
           "fillColor": "#66CCFF",
           "strokeWidth": 4
@@ -54,7 +54,7 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/path",
+          "type": "@ocif/path",
           "strokeColor": "#000000",
           "fillColor": "transparent",
           "strokeWidth": 4,
@@ -117,7 +117,7 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/rect",
+          "type": "@ocif/rect",
           "strokeColor": "#000000",
           "fillColor": "transparent",
           "strokeWidth": 2,
@@ -139,14 +139,15 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/path",
+          "type": "@ocif/path",
           "strokeColor": "#000000",
           "fillColor": "transparent",
           "strokeWidth": 4,
           "path": "M0,0L2.5,0L5.46,0L14.3,-0.74L22.43,-0.74L27.33,-1.15L31.77,-1.81L33.69,-2.08L36.9,-3.87L38.66,-5.63L38.9,-7.12L39.21,-9.53L39.21,-11.4L39.21,-12.65L39.21,-14.91L38.52,-16.11L37.25,-16.64L35.71,-16.64L34.94,-16.25L33.2,-11.92L32.49,-8.35L31.54,-1.28L31.54,10.2L31.54,20.31L31.1,32.56L29.9,42.5L29.67,43.6L28.58,47.48L27.92,48.36L26.81,49.24L26.08,49.24L25.3,49.24L25.02,49.24L23.49,47.49L23.1,46.72L22.72,45.94L22.54,45.25L22.32,44.15L22.32,42.66L22.32,41.57L22.32,40.47L22.87,38.55L24.38,36.44L27.65,32.35L31.21,29.18L33.19,26.87L37.58,22.92L41.29,19.62L44.99,16.33L48.7,13.03L49.58,12.15L53.97,8.19L54.63,7.32L57.12,4.46L58.22,2.81L59.04,0.89L59.85,-0.98L60.15,-3.4L60.72,-7.74L60.72,-9.66L60.72,-11.58L60.72,-13.84L60.5,-14.94L59.51,-16.32L59.01,-16.65L58.73,-16.79L58.17,-16.93L57.62,-16.93L57.34,-16.65L56.6,-13.15L55.83,-8.92L55.44,-2.28L55.44,2.66L55.44,7.6L55.44,11.83L55.44,16.77L56.52,20.34L57.94,23.9L59.35,27.44L61.14,30.65L62.79,33.29L63.67,34.17L64.75,35.79L65.74,37.03L66.62,37.91L67.39,38.3L68.87,38.54L69.37,38.54L70.14,38.54L70.64,38.21L71.08,37.11L71.57,35.63L72.07,34.14L72.34,32.22L72.62,30.29L72.62,27.88L72.62,25.95L72.62,25.18L72.62,23.26L72.62,21.77L72.4,20.67L72.17,19.57L71.79,18.8L71.46,18.3L71.17,18.02L70.68,17.85L70.12,17.71L69.62,17.71L69.13,17.71L68.63,18.95L68.63,20.44L68.63,22.34L68.63,23.82L70.27,26.46L72.25,28.76L74.54,30.73L76.85,32.7L77.94,33.14L79.59,34.24L81.08,34.98L82.56,35.48L83.66,35.69L84.43,35.69L86.03,35.37L86.47,34.27L86.96,32.78L87.51,30.86L88.06,28.94L88.28,27.84L88.55,25.92L88.8,24.43L89.02,23.33L89.21,22.56L89.4,21.78L89.54,21.5L89.54,21.39L89.65,21.39L89.65,21.49L89.65,22.97L89.9,24.46L90.17,26.38L90.39,27.46L90.64,28.94L91.08,30.04L91.46,30.82L92.34,31.7L92.84,31.87L93.34,31.87L94.11,31.48L94.84,30.01L95.67,28.08L96.1,27L96.59,25.52L97.33,24.03L97.77,22.93L98.43,22.05L99.01,21.47L100.01,21.47L101.1,23.12L102.64,27.35L105.27,38.83L106.25,46.11L107.29,62.88L107.29,75.8L106.35,82.33L105.61,83.82L100.83,92.56L96.49,93.38L93.52,93.38L92.15,92L90.5,89.37L88.58,85.52L86.6,71.56L87.92,51.95L96.59,32.29L99.05,27.78L103.75,20.46L107.49,14.86L108.86,13.48L111.55,10.02L113.85,8.06L115.49,6.96L116.98,6.71L118.89,6.43L119.67,6.43",
           "closed": false
         }
-      ]
+      ],
+      "parent": "shape:EafuN84Co6qt8HA1O0TKK"
     },
     {
       "id": "shape:p5gacgkWsIIiBC7-HhuzJ",
@@ -161,7 +162,7 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/rect",
+          "type": "@ocif/rect",
           "strokeColor": "transparent",
           "fillColor": "transparent",
           "strokeWidth": 0,
@@ -172,7 +173,7 @@
           "textAlign": "left"
         },
         {
-          "type": "@ocif/node/textstyle",
+          "type": "@ocif/textstyle",
           "fontSizePx": 16,
           "fontFamily": "draw",
           "color": "#000000",
@@ -195,7 +196,7 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/arrow",
+          "type": "@ocif/arrow",
           "strokeColor": "#FFDD00",
           "start": [
             0,
@@ -208,6 +209,16 @@
           "startMarker": "none",
           "endMarker": "arrowhead",
           "strokeWidth": 4
+        },
+        {
+          "type": "@ocif/edge",
+          "start": "shape:sEDTvhfZGpq0WGVPlPWh8",
+          "end": "shape:nq8CfmDFcx27dd171PIYS"
+        },
+        {
+          "type": "@ocif/edge",
+          "start": "shape:sEDTvhfZGpq0WGVPlPWh8",
+          "end": "shape:G90KOkkci7b-x0OP2h_jo"
         }
       ]
     },
@@ -224,7 +235,7 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/rect",
+          "type": "@ocif/rect",
           "strokeColor": "#FFDD00",
           "fillColor": "#FFDD00",
           "strokeWidth": 4
@@ -244,7 +255,8 @@
       "rotation": 0,
       "data": [],
       "resource": "asset:-1052655633",
-      "resourceFit": "contain"
+      "resourceFit": "contain",
+      "parent": "shape:EafuN84Co6qt8HA1O0TKK"
     },
     {
       "id": "shape:8qnyJ2QrM_p9qORBMTzdV",
@@ -282,7 +294,7 @@
       "rotation": 0,
       "data": [
         {
-          "type": "@ocif/node/rect",
+          "type": "@ocif/rect",
           "strokeColor": "transparent",
           "fillColor": "transparent",
           "strokeWidth": 0,
@@ -293,59 +305,13 @@
           "textAlign": "left"
         },
         {
-          "type": "@ocif/node/textstyle",
+          "type": "@ocif/textstyle",
           "fontSizePx": 48,
           "fontFamily": "draw",
           "color": "#66CCFF",
           "align": "left",
           "bold": false,
           "italic": false
-        }
-      ]
-    }
-  ],
-  "relations": [
-    {
-      "id": "binding:OwLITlLB-Qf7Vxm2aSA7M",
-      "node": "shape:sEDTvhfZGpq0WGVPlPWh8",
-      "data": [
-        {
-          "type": "@ocif/rel/edge",
-          "start": "shape:sEDTvhfZGpq0WGVPlPWh8",
-          "end": "shape:nq8CfmDFcx27dd171PIYS"
-        }
-      ]
-    },
-    {
-      "id": "binding:8FqCz054zm2rLbycrvWQ1",
-      "node": "shape:sEDTvhfZGpq0WGVPlPWh8",
-      "data": [
-        {
-          "type": "@ocif/rel/edge",
-          "start": "shape:sEDTvhfZGpq0WGVPlPWh8",
-          "end": "shape:G90KOkkci7b-x0OP2h_jo"
-        }
-      ]
-    },
-    {
-      "id": "frame_shape:EafuN84Co6qt8HA1O0TKK_shape:kRMIxYWZibzona6uNr_sF",
-      "node": "shape:kRMIxYWZibzona6uNr_sF",
-      "data": [
-        {
-          "type": "@ocif/rel/parent-child",
-          "parent": "shape:EafuN84Co6qt8HA1O0TKK",
-          "child": "shape:kRMIxYWZibzona6uNr_sF"
-        }
-      ]
-    },
-    {
-      "id": "frame_shape:EafuN84Co6qt8HA1O0TKK_shape:VaPY7E7hh1CL-UbII-11F",
-      "node": "shape:VaPY7E7hh1CL-UbII-11F",
-      "data": [
-        {
-          "type": "@ocif/rel/parent-child",
-          "parent": "shape:EafuN84Co6qt8HA1O0TKK",
-          "child": "shape:VaPY7E7hh1CL-UbII-11F"
         }
       ]
     }
@@ -376,14 +342,13 @@
   ],
   "schemas": [
     {
-      "name": "@ocif/node/rect",
-      "uri": "https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json",
-      "location": "https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json",
+      "name": "@ocif/rect",
+      "uri": "https://spec.canvasprotocol.org/v0.7.0/extensions/rect.json",
       "schema": {
         "type": "object",
         "properties": {
           "type": {
-            "const": "@ocif/node/rect"
+            "const": "@ocif/rect"
           },
           "strokeColor": {
             "type": "string"
@@ -413,14 +378,13 @@
       }
     },
     {
-      "name": "@ocif/node/path",
-      "uri": "https://spec.canvasprotocol.org/v0.6/extensions/path-node.json",
-      "location": "https://spec.canvasprotocol.org/v0.6/extensions/path-node.json",
+      "name": "@ocif/path",
+      "uri": "https://spec.canvasprotocol.org/v0.7.0/extensions/path.json",
       "schema": {
         "type": "object",
         "properties": {
           "type": {
-            "const": "@ocif/node/path"
+            "const": "@ocif/path"
           },
           "strokeColor": {
             "type": "string"
@@ -441,14 +405,13 @@
       }
     },
     {
-      "name": "@ocif/node/arrow",
-      "uri": "https://spec.canvasprotocol.org/v0.6/extensions/arrow-node.json",
-      "location": "https://spec.canvasprotocol.org/v0.6/extensions/arrow-node.json",
+      "name": "@ocif/arrow",
+      "uri": "https://spec.canvasprotocol.org/v0.7.0/extensions/arrow.json",
       "schema": {
         "type": "object",
         "properties": {
           "type": {
-            "const": "@ocif/node/arrow"
+            "const": "@ocif/arrow"
           },
           "strokeColor": {
             "type": "string"
@@ -478,14 +441,13 @@
       }
     },
     {
-      "name": "@ocif/rel/edge",
-      "uri": "https://spec.canvasprotocol.org/v0.6/extensions/edge-rel.json",
-      "location": "https://spec.canvasprotocol.org/v0.6/extensions/edge-rel.json",
+      "name": "@ocif/edge",
+      "uri": "https://spec.canvasprotocol.org/v0.7.0/extensions/edge.json",
       "schema": {
         "type": "object",
         "properties": {
           "type": {
-            "const": "@ocif/rel/edge"
+            "const": "@ocif/edge"
           },
           "start": {
             "type": "string"
@@ -499,7 +461,6 @@
     {
       "name": "@tldraw/node/note",
       "uri": "https://tldraw.com/schemas/note-node.json",
-      "location": "https://tldraw.com/schemas/note-node.json",
       "schema": {
         "type": "object",
         "properties": {
@@ -539,7 +500,6 @@
     {
       "name": "@tldraw/node/embed",
       "uri": "https://tldraw.com/schemas/embed-node.json",
-      "location": "https://tldraw.com/schemas/embed-node.json",
       "schema": {
         "type": "object",
         "properties": {
@@ -561,7 +521,6 @@
     {
       "name": "@tldraw/node/bookmark",
       "uri": "https://tldraw.com/schemas/bookmark-node.json",
-      "location": "https://tldraw.com/schemas/bookmark-node.json",
       "schema": {
         "type": "object",
         "properties": {
@@ -590,14 +549,13 @@
       }
     },
     {
-      "name": "@ocif/node/textstyle",
-      "uri": "https://spec.canvasprotocol.org/v0.6/extensions/textstyle-node.json",
-      "location": "https://spec.canvasprotocol.org/v0.6/extensions/textstyle-node.json",
+      "name": "@ocif/textstyle",
+      "uri": "https://spec.canvasprotocol.org/v0.7.0/extensions/textstyle.json",
       "schema": {
         "type": "object",
         "properties": {
           "type": {
-            "const": "@ocif/node/textstyle"
+            "const": "@ocif/textstyle"
           },
           "fontSizePx": {
             "type": "number"
@@ -621,31 +579,6 @@
             "type": "boolean"
           },
           "italic": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    {
-      "name": "@ocif/rel/parent-child",
-      "uri": "https://spec.canvasprotocol.org/v0.6/extensions/parent-child-rel.json",
-      "location": "https://spec.canvasprotocol.org/v0.6/extensions/parent-child-rel.json",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "const": "@ocif/rel/parent-child"
-          },
-          "parent": {
-            "type": "string"
-          },
-          "child": {
-            "type": "string"
-          },
-          "inherit": {
-            "type": "boolean"
-          },
-          "cascadeDelete": {
             "type": "boolean"
           }
         }

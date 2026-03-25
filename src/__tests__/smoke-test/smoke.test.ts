@@ -82,20 +82,15 @@ describe('Smoke test — QA pruned fixture', () => {
 			})
 		})
 
-		it('should create bindings for edge relations', () => {
+		it('should create bindings for edge extensions', () => {
 			const result = parseOcifFile({ json: ocifJson, schema })
 			if (!result.ok) throw new Error('Parse failed')
 
 			const records = Array.from(result.value.allRecords())
 			const bindings = records.filter((r) => r.typeName === 'binding')
 
-			// 2 edge relations in the fixture
+			// 2 edge extensions on the arrow node in the v0.7.0 fixture
 			expect(bindings.length).toBeGreaterThanOrEqual(2)
-
-			// Verify the specific bindings exist
-			const bindingIds = bindings.map((b) => b.id)
-			expect(bindingIds).toContain('binding:OwLITlLB-Qf7Vxm2aSA7M')
-			expect(bindingIds).toContain('binding:8FqCz054zm2rLbycrvWQ1')
 		})
 
 		it('should create assets for resources', () => {
@@ -219,18 +214,20 @@ describe('Smoke test — QA pruned fixture', () => {
 			const records = Array.from(result.value.allRecords())
 			const bindings = records.filter((r) => r.typeName === 'binding') as any[]
 
-			// Arrow → rect binding
-			const b1 = bindings.find((b) => b.id === 'binding:OwLITlLB-Qf7Vxm2aSA7M')
-			expect(b1).toBeDefined()
-			expect(b1.type).toBe('arrow')
-			expect(b1.fromId).toBe('shape:sEDTvhfZGpq0WGVPlPWh8')
-			expect(b1.toId).toBe('shape:nq8CfmDFcx27dd171PIYS')
+			expect(bindings).toHaveLength(2)
 
-			const b2 = bindings.find((b) => b.id === 'binding:8FqCz054zm2rLbycrvWQ1')
-			expect(b2).toBeDefined()
-			expect(b2.type).toBe('arrow')
-			expect(b2.fromId).toBe('shape:sEDTvhfZGpq0WGVPlPWh8')
-			expect(b2.toId).toBe('shape:G90KOkkci7b-x0OP2h_jo')
+			// Both bindings originate from the arrow node
+			for (const b of bindings) {
+				expect(b.type).toBe('arrow')
+				expect(b.fromId).toBe('shape:sEDTvhfZGpq0WGVPlPWh8')
+			}
+
+			// One should connect to each target
+			const toIds = bindings.map((b: any) => b.toId).sort()
+			expect(toIds).toEqual([
+				'shape:G90KOkkci7b-x0OP2h_jo',
+				'shape:nq8CfmDFcx27dd171PIYS',
+			])
 		})
 	})
 
@@ -258,7 +255,7 @@ describe('Smoke test — QA pruned fixture', () => {
 			expect(ocifShapes).toEqual(tldrShapes)
 		})
 
-		it('should produce the same binding IDs from OCIF as exist in the .tldr', () => {
+		it('should produce the same number of bindings from OCIF as exist in the .tldr', () => {
 			const ocifResult = parseOcifFile({ json: ocifJson, schema })
 			const tldrResult = parseTldrawJsonFile({ json: tldrJson, schema })
 			if (!ocifResult.ok) throw new Error('OCIF parse failed')
@@ -266,15 +263,11 @@ describe('Smoke test — QA pruned fixture', () => {
 
 			const tldrBindings = Array.from(tldrResult.value.allRecords())
 				.filter((r) => r.typeName === 'binding')
-				.map((r) => r.id)
-				.sort()
 
 			const ocifBindings = Array.from(ocifResult.value.allRecords())
 				.filter((r) => r.typeName === 'binding')
-				.map((r) => r.id)
-				.sort()
 
-			expect(ocifBindings).toEqual(tldrBindings)
+			expect(ocifBindings).toHaveLength(tldrBindings.length)
 		})
 
 		it('should produce the same number of assets from OCIF as exist in the .tldr', () => {

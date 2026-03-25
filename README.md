@@ -2,7 +2,7 @@
 
 [OCIF (Open Canvas Interchange Format)](https://github.com/ocwg/spec) plugin for [tldraw](https://tldraw.dev) — import and export canvases using the OCWG specification.
 
-> **Status**: Work in progress — implements OCIF v0.6
+> **Status**: Implements OCIF v0.7.0
 
 ## Install
 
@@ -60,7 +60,7 @@ if (result.ok) {
 
 | Export | Description |
 | --- | --- |
-| `serializeTldrawToOcif(editor)` | Export the current page to an OCIF JSON string |
+| `serializeTldrawToOcif(editor)` | Export the current page to an OCIF v0.7.0 JSON string |
 | `serializeTldrawToOcifBlob(editor)` | Export to a `Blob` with the correct MIME type |
 | `parseOcifFile({ json, schema })` | Parse OCIF JSON → `Result<TLStore, OcifFileParseError>` |
 | `parseAndLoadOcifFile(editor, json, msg, addToast)` | Parse and load OCIF directly into a tldraw editor |
@@ -72,7 +72,6 @@ if (result.ok) {
 ```ts
 OcifFile
 OcifNode
-OcifRelation
 OcifResource
 OcifRepresentation
 OcifSchema
@@ -81,19 +80,32 @@ OcifFileParseError
 
 ## Supported OCIF features
 
-### Core (OCIF v0.6)
+### Shapes (OCIF v0.7.0)
 
-- **Nodes**: `@ocif/node/rect`, `@ocif/node/oval`, `@ocif/node/path`, `@ocif/node/arrow`
-- **Relations**: `@ocif/rel/edge`, `@ocif/rel/group`
-- **Resources**: image, video, and bookmark assets with representations
+- `@ocif/rect` — rectangles (and geo variants like diamond, star, triangle, etc.)
+- `@ocif/oval` — ellipses / circles
+- `@ocif/path` — SVG paths / freehand drawing
+- `@ocif/arrow` — arrows with markers
 
-### Extensions
+### Structural extensions
 
-- `@ocif/node/transforms` — scale, rotation, offset
-- `@ocif/node/textstyle` — font size, family, color, alignment
-- `@ocif/node/ports` — precise anchor points for arrow bindings
-- `@ocif/rel/parent-child` — frame containment
-- `@ocif/rel/hyperedge` — many-to-many relationships
+- `@ocif/edge` — directed/undirected edges between nodes
+- `@ocif/group` — grouping nodes together
+- `@ocif/hyperedge` — many-to-many relationships
+- Node `parent` property — frame containment / nesting
+
+### Style extensions
+
+- `@ocif/textstyle` — font size, family, color, alignment
+
+### Layout
+
+- `@ocif/ports` — precise anchor points for arrow bindings
+- Node `scale` property — scale factor (v0.7.0 core property)
+
+### Resources
+
+- Image, video, and bookmark assets with representations
 
 ### tldraw-specific extensions
 

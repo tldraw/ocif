@@ -20,7 +20,6 @@ export type {
 	OcifFile,
 	OcifFileParseError,
 	OcifNode,
-	OcifRelation,
 	OcifRepresentation,
 	OcifResource,
 	OcifSchema,

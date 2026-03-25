@@ -69,34 +69,26 @@ export interface OcifRepresentation {
 /** @public */
 export interface OcifNode {
 	id: string
-	position: [number, number]
+	position?: [number, number]
 	size?: [number, number]
 	resource?: string
 	resourceFit?: string
 	rotation?: number
-	relation?: string
+	rotationAxis?: [number, number, number]
+	scale?: number | number[]
+	parent?: string
+	deleteWithParent?: boolean
+	comment?: string
 	data: Array<{
 		type: string
 		[key: string]: any
 	}>
-}
-
-/** @public */
-export interface OcifRelation {
-	id: string
-	node?: string
-	data: Array<{
-		type: string
-		[key: string]: any
-	}>
-	cascadeDelete?: boolean
 }
 
 /** @public */
 export interface OcifResource {
 	id: string
 	representations?: OcifRepresentation[]
-	// Legacy support for current implementation
 	data?: string
 	mimeType?: string
 }
@@ -115,7 +107,6 @@ export interface OcifFile {
 	rootNode?: string
 	data?: Array<{ type: string; [key: string]: any }>
 	nodes?: OcifNode[]
-	relations?: OcifRelation[]
 	resources?: OcifResource[]
 	schemas?: OcifSchema[]
 }
@@ -132,77 +123,29 @@ export type OcifFileParseError =
 
 /** @public */
 export async function serializeTldrawToOcif(editor: Editor): Promise<string> {
-	// Get all current records (this automatically excludes deleted records)
 	const records = editor.store.allRecords()
 	const nodes: OcifNode[] = []
-	const relations: OcifRelation[] = []
 	const resources: OcifResource[] = []
-	const usedExtensions = new Set<string>()
-
-	// Track which schemas are actually used
 	const usedSchemaTypes = new Set<string>()
 
-	// Convert shapes to nodes
+	// Build a map of arrow shape IDs → their bindings for edge extensions
+	const arrowBindings = new Map<string, Array<{ fromId: string; toId: string; bindingId: string }>>()
 	for (const record of records) {
-		if (record.typeName === 'shape') {
-			const node = convertTldrawShapeToOcifNode(record as any, editor)
-			if (node) {
-				nodes.push(node)
-				// Track used schema types
-				node.data.forEach((data) => {
-					usedSchemaTypes.add(data.type)
-					if (data.type.startsWith('@ocif/')) {
-						usedExtensions.add(data.type)
-					}
-				})
+		if (record.typeName === 'binding' && (record as any).type === 'arrow') {
+			const binding = record as any
+			const fromId = binding.fromId
+			if (!arrowBindings.has(fromId)) {
+				arrowBindings.set(fromId, [])
 			}
+			arrowBindings.get(fromId)!.push({
+				fromId: binding.fromId,
+				toId: binding.toId,
+				bindingId: binding.id,
+			})
 		}
 	}
 
-	// Convert bindings to relations
-	for (const record of records) {
-		if (record.typeName === 'binding') {
-			const relation = convertTldrawBindingToOcifRelation(record as any, editor)
-			if (relation) {
-				relations.push(relation)
-				// Track used schema types
-				relation.data.forEach((data) => {
-					usedSchemaTypes.add(data.type)
-					if (data.type.startsWith('@ocif/')) {
-						usedExtensions.add(data.type)
-					}
-				})
-			}
-		}
-	}
-
-	// Collect all resource/asset IDs referenced by nodes
-	const referencedResourceIds = new Set<string>()
-	for (const node of nodes) {
-		if (node.resource) {
-			referencedResourceIds.add(node.resource)
-		}
-		// Also check data blocks for asset references (e.g. bookmarks)
-		for (const d of node.data) {
-			if (d.assetId) {
-				referencedResourceIds.add(d.assetId)
-			}
-		}
-	}
-
-	// Convert assets to resources, but only those referenced by nodes
-	for (const record of records) {
-		if (record.typeName === 'asset') {
-			if (referencedResourceIds.has(record.id)) {
-				const resource = await convertTldrawAssetToOcifResource(record as any, editor)
-				if (resource) {
-					resources.push(resource)
-				}
-			}
-		}
-	}
-
-	// Handle group relations
+	// Collect group membership: groupId → memberIds
 	const groupsToMembers = new Map<string, string[]>()
 	for (const record of records) {
 		if (
@@ -211,60 +154,94 @@ export async function serializeTldrawToOcif(editor: Editor): Promise<string> {
 			(record as any).parentId !== editor.getCurrentPageId()
 		) {
 			const parentShape = editor.getShape((record as any).parentId)
-			if (parentShape) {
-				if (parentShape.type === 'group') {
-					// Collect group members
-					const groupId = (record as any).parentId
-					if (!groupsToMembers.has(groupId)) {
-						groupsToMembers.set(groupId, [])
-					}
-					groupsToMembers.get(groupId)!.push(record.id)
-				} else if (parentShape.type === 'frame') {
-					// Create parent-child relation for frame containment
-					relations.push({
-						id: `frame_${(record as any).parentId}_${record.id}`,
-						node: record.id,
-						data: [
-							{
-								type: '@ocif/rel/parent-child',
-								parent: (record as any).parentId,
-								child: record.id,
-							},
-						],
-					})
-					usedSchemaTypes.add('@ocif/rel/parent-child')
-					usedExtensions.add('@ocif/rel/parent-child')
+			if (parentShape?.type === 'group') {
+				const groupId = (record as any).parentId
+				if (!groupsToMembers.has(groupId)) {
+					groupsToMembers.set(groupId, [])
 				}
+				groupsToMembers.get(groupId)!.push(record.id)
 			}
 		}
 	}
 
-	// Create group relations
-	for (const [groupId, members] of groupsToMembers) {
-		relations.push({
-			id: `group_${groupId}`,
-			node: groupId,
-			cascadeDelete: true,
-			data: [
-				{
-					type: '@ocif/rel/group',
-					members: members,
-				},
-			],
-		})
-		usedSchemaTypes.add('@ocif/rel/group')
-		usedExtensions.add('@ocif/rel/group')
+	// Convert shapes to nodes
+	for (const record of records) {
+		if (record.typeName === 'shape') {
+			const shape = record as any
+
+			// Groups become nodes with @ocif/group extension
+			if (shape.type === 'group') {
+				const members = groupsToMembers.get(shape.id)
+				if (members && members.length > 0) {
+					const groupNode: OcifNode = {
+						id: shape.id,
+						position: [shape.x, shape.y],
+						data: [
+							{
+								type: '@ocif/group',
+								members,
+								cascadeDelete: true,
+							},
+						],
+					}
+					nodes.push(groupNode)
+					usedSchemaTypes.add('@ocif/group')
+				}
+				continue
+			}
+
+			const node = convertTldrawShapeToOcifNode(shape, editor)
+			if (node) {
+				// Add edge extensions for arrow bindings
+				const bindings = arrowBindings.get(shape.id)
+				if (bindings) {
+					for (const b of bindings) {
+						node.data.push({
+							type: '@ocif/edge',
+							start: b.fromId,
+							end: b.toId,
+						})
+						usedSchemaTypes.add('@ocif/edge')
+					}
+				}
+
+				// Set parent property for frame/group containment
+				if (shape.parentId && shape.parentId !== editor.getCurrentPageId()) {
+					const parentShape = editor.getShape(shape.parentId)
+					if (parentShape) {
+						node.parent = shape.parentId
+					}
+				}
+
+				nodes.push(node)
+				node.data.forEach((d) => usedSchemaTypes.add(d.type))
+			}
+		}
 	}
 
-	// Only include schemas that are actually used
+	// Collect referenced resources
+	const referencedResourceIds = new Set<string>()
+	for (const node of nodes) {
+		if (node.resource) referencedResourceIds.add(node.resource)
+		for (const d of node.data) {
+			if (d.assetId) referencedResourceIds.add(d.assetId)
+		}
+	}
+
+	for (const record of records) {
+		if (record.typeName === 'asset' && referencedResourceIds.has(record.id)) {
+			const resource = await convertTldrawAssetToOcifResource(record as any, editor)
+			if (resource) resources.push(resource)
+		}
+	}
+
 	const schemas = getOcifSchemas().filter(
 		(schema) => usedSchemaTypes.has(schema.name) || schema.name === 'ocif'
 	)
 
 	const ocifFile: OcifFile = {
-		ocif: 'https://canvasprotocol.org/ocif/v0.6',
+		ocif: 'https://canvasprotocol.org/ocif/v0.7.0',
 		nodes,
-		relations: relations.length > 0 ? relations : undefined,
 		resources: resources.length > 0 ? resources : undefined,
 		schemas: schemas.length > 0 ? schemas : undefined,
 	}
@@ -299,21 +276,21 @@ export function parseOcifFile({
 		return Result.err({ type: 'notAnOcifFile', cause: e })
 	}
 
-	// Check if OCIF version is supported
-	if (!data.ocif.includes('v0.6') && !data.ocif.includes('v0.5')) {
+	if (!data.ocif.includes('v0.7')) {
 		return Result.err({ type: 'ocifVersionNotSupported', version: data.ocif })
 	}
 
 	try {
 		const records: TLRecord[] = []
 		const assetMap = new Map<string, string>()
-		const altTextMap = new Map<string, string>() // Store altText for each resource
-		const groupRelations = new Map<string, string[]>() // groupId -> memberIds
-		const parentChildRelations = new Map<string, string>() // childId -> parentId
-		const hyperedgeRelations: any[] = [] // Store hyperedge relations for processing
+		const altTextMap = new Map<string, string>()
+		const groupRelations = new Map<string, string[]>()
+		const parentChildRelations = new Map<string, string>()
+		const hyperedgeNodes: OcifNode[] = []
+		const edgeRelations: Array<{ nodeId: string; start: string; end: string }> = []
 
 		// Convert OCIF resources to TLDraw assets
-		const resourceTypeMap = new Map<string, string>() // resourceId -> 'image' | 'video' | 'bookmark'
+		const resourceTypeMap = new Map<string, string>()
 		if (data.resources) {
 			for (const resource of data.resources) {
 				const assetResult = convertOcifResourceToTldrawAsset(resource)
@@ -328,33 +305,37 @@ export function parseOcifFile({
 			}
 		}
 
-		// Collect relations first
-		if (data.relations) {
-			for (const relation of data.relations) {
-				const primaryData = relation.data[0]
-				if (!primaryData) continue
+		// Extract structural info from node extensions
+		for (const node of data.nodes ?? []) {
+			if (node.parent) {
+				parentChildRelations.set(node.id, node.parent)
+			}
 
-				if (primaryData.type === '@ocif/rel/group') {
-					groupRelations.set(relation.id, primaryData.members || [])
-				} else if (primaryData.type === '@ocif/rel/parent-child') {
-					parentChildRelations.set(primaryData.child, primaryData.parent)
-				} else if (primaryData.type === '@ocif/rel/hyperedge') {
-					hyperedgeRelations.push(relation)
+			for (const d of node.data) {
+				if (d.type === '@ocif/group') {
+					groupRelations.set(node.id, d.members || [])
+				} else if (d.type === '@ocif/edge') {
+					edgeRelations.push({ nodeId: node.id, start: d.start, end: d.end })
+				} else if (d.type === '@ocif/hyperedge') {
+					hyperedgeNodes.push(node)
 				}
 			}
 		}
 
 		// Convert OCIF nodes to TLDraw shapes
+		const structuralOnlyTypes = new Set(['@ocif/group', '@ocif/hyperedge', '@ocif/edge', '@ocif/inherit'])
 		for (const node of data.nodes ?? []) {
+			// Skip nodes that are purely structural (no visual representation)
+			const isStructuralOnly = node.data.length > 0 && node.data.every((d) => structuralOnlyTypes.has(d.type))
+			if (isStructuralOnly) continue
+
 			const shapeRecord = convertOcifNodeToTldrawShape(node, assetMap, altTextMap, resourceTypeMap)
 			if (shapeRecord) {
-				// Set parent if this node has a parent-child relation
 				const parentId = parentChildRelations.get(node.id)
 				if (parentId) {
 					const parentShapeId = parentId.startsWith('shape:') ? parentId : `shape:${parentId}`
 					;(shapeRecord as any).parentId = parentShapeId
 				}
-
 				records.push(shapeRecord)
 			}
 		}
@@ -364,19 +345,18 @@ export function parseOcifFile({
 		for (const [_childId, parentId] of parentChildRelations) {
 			if (!frameIds.has(parentId)) {
 				frameIds.add(parentId)
-
-				// Find the parent node to get its properties
 				const parentNode = (data.nodes ?? []).find((n) => n.id === parentId)
 				if (parentNode) {
 					const frameData = parentNode.data.find((d) => d.isFrame)
 					if (frameData) {
 						const frameShapeId = parentId.startsWith('shape:') ? parentId : `shape:${parentId}`
+						const pos = parentNode.position ?? [0, 0]
 						const frameShape = {
 							id: frameShapeId,
 							typeName: 'shape' as const,
 							type: 'frame',
-							x: parentNode.position[0],
-							y: parentNode.position[1],
+							x: pos[0],
+							y: pos[1],
 							rotation: parentNode.rotation || 0,
 							index: 'a1' as any,
 							parentId: 'page:page' as any,
@@ -398,10 +378,8 @@ export function parseOcifFile({
 
 		// Create group shapes and set up parent-child relationships
 		for (const [groupId, memberIds] of groupRelations) {
-			// Create the group shape
 			const groupShapeId = groupId.startsWith('shape:') ? groupId : `shape:${groupId}`
 
-			// Find the bounds of all member shapes
 			let minX = Infinity,
 				minY = Infinity,
 				maxX = -Infinity,
@@ -421,13 +399,17 @@ export function parseOcifFile({
 			}
 
 			if (memberShapes.length > 0) {
-				// Create group shape
+				// Check if group node already has position from OCIF
+				const groupNode = (data.nodes ?? []).find((n) => n.id === groupId)
+				const groupX = groupNode?.position?.[0] ?? minX
+				const groupY = groupNode?.position?.[1] ?? minY
+
 				const groupShape = {
 					id: groupShapeId,
 					typeName: 'shape' as const,
 					type: 'group',
-					x: minX,
-					y: minY,
+					x: groupX,
+					y: groupY,
 					rotation: 0,
 					index: 'a1' as any,
 					parentId: 'page:page' as any,
@@ -438,39 +420,35 @@ export function parseOcifFile({
 				} as any
 				records.push(groupShape)
 
-				// Update member shapes to have the group as parent
 				for (const shape of memberShapes) {
 					shape.parentId = groupShapeId
-					// Adjust coordinates relative to group
-					shape.x -= minX
-					shape.y -= minY
+					shape.x -= groupX
+					shape.y -= groupY
 				}
 			}
 		}
 
-		// Process hyperedge relations - create multiple arrow bindings
-		for (const hyperedge of hyperedgeRelations) {
-			const primaryData = hyperedge.data[0]
-			if (primaryData && primaryData.endpoints) {
-				const endpoints = primaryData.endpoints
-
-				// Create arrows from 'in' endpoints to 'out' endpoints
+		// Process hyperedge nodes
+		for (const hyperedge of hyperedgeNodes) {
+			const heData = hyperedge.data.find((d) => d.type === '@ocif/hyperedge')
+			if (heData?.endpoints) {
+				const endpoints = heData.endpoints
 				const inEndpoints = endpoints.filter((ep: any) => ep.direction === 'in')
 				const outEndpoints = endpoints.filter((ep: any) => ep.direction === 'out')
 				const undirEndpoints = endpoints.filter((ep: any) => ep.direction === 'undir')
 
-				// If we have both in and out endpoints, create arrows between them
 				if (inEndpoints.length > 0 && outEndpoints.length > 0) {
 					for (let i = 0; i < Math.max(inEndpoints.length, outEndpoints.length); i++) {
-						const inEndpoint = inEndpoints[i % inEndpoints.length]
-						const outEndpoint = outEndpoints[i % outEndpoints.length]
-
-						const bindingRecord = {
+						const inEp = inEndpoints[i % inEndpoints.length]
+						const outEp = outEndpoints[i % outEndpoints.length]
+						const inId = inEp.id.startsWith('shape:') ? inEp.id : `shape:${inEp.id}`
+						const outId = outEp.id.startsWith('shape:') ? outEp.id : `shape:${outEp.id}`
+						records.push({
 							id: `binding:hyperedge-${hyperedge.id}-${i}`,
 							typeName: 'binding' as const,
 							type: 'arrow',
-							fromId: `shape:${inEndpoint.id}`,
-							toId: `shape:${outEndpoint.id}`,
+							fromId: inId,
+							toId: outId,
 							meta: {},
 							props: {
 								terminal: 'end',
@@ -479,22 +457,19 @@ export function parseOcifFile({
 								isPrecise: false,
 								snap: 'none',
 							},
-						} as any
-						records.push(bindingRecord)
+						} as any)
 					}
 				}
 
-				// Handle undirected endpoints by creating bidirectional connections
 				for (let i = 0; i < undirEndpoints.length - 1; i++) {
-					const ep1 = undirEndpoints[i]
-					const ep2 = undirEndpoints[i + 1]
-
-					const bindingRecord = {
+					const ep1Id = undirEndpoints[i].id.startsWith('shape:') ? undirEndpoints[i].id : `shape:${undirEndpoints[i].id}`
+					const ep2Id = undirEndpoints[i + 1].id.startsWith('shape:') ? undirEndpoints[i + 1].id : `shape:${undirEndpoints[i + 1].id}`
+					records.push({
 						id: `binding:hyperedge-undir-${hyperedge.id}-${i}`,
 						typeName: 'binding' as const,
 						type: 'arrow',
-						fromId: `shape:${ep1.id}`,
-						toId: `shape:${ep2.id}`,
+						fromId: ep1Id,
+						toId: ep2Id,
 						meta: {},
 						props: {
 							terminal: 'end',
@@ -503,28 +478,32 @@ export function parseOcifFile({
 							isPrecise: false,
 							snap: 'none',
 						},
-					} as any
-					records.push(bindingRecord)
+					} as any)
 				}
 			}
 		}
 
-		// Convert OCIF relations to TLDraw bindings (excluding group and parent-child relations)
-		if (data.relations) {
-			for (const relation of data.relations) {
-				const primaryData = relation.data[0]
-				if (
-					primaryData &&
-					primaryData.type !== '@ocif/rel/group' &&
-					primaryData.type !== '@ocif/rel/parent-child' &&
-					primaryData.type !== '@ocif/rel/hyperedge'
-				) {
-					const bindingRecord = convertOcifRelationToTldrawBinding(relation)
-					if (bindingRecord) {
-						records.push(bindingRecord)
-					}
-				}
-			}
+		// Convert edge extensions to tldraw bindings
+		let edgeIndex = 0
+		for (const edge of edgeRelations) {
+			const bindingId = `binding:edge-${edge.nodeId}-${edgeIndex++}`
+			const fromId = edge.start.startsWith('shape:') ? edge.start : `shape:${edge.start}`
+			const toId = edge.end.startsWith('shape:') ? edge.end : `shape:${edge.end}`
+			records.push({
+				id: bindingId,
+				typeName: 'binding',
+				type: 'arrow',
+				fromId,
+				toId,
+				meta: {},
+				props: {
+					terminal: 'end',
+					normalizedAnchor: { x: 0.5, y: 0.5 },
+					isExact: false,
+					isPrecise: false,
+					snap: 'none',
+				},
+			} as any)
 		}
 
 		// Filter out any records that might be invalid or have broken references
@@ -699,30 +678,28 @@ function calculateDrawShapeSize(segments: any[]): [number, number] {
 function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | null {
 	const position: [number, number] = [shape.x, shape.y]
 
-	// Calculate size based on shape type
 	let size: [number, number]
 	if (shape.type === 'draw') {
-		// For draw shapes, calculate bounding box from segments
 		size = calculateDrawShapeSize(shape.props.segments)
 	} else if (shape.type === 'text') {
-		// For text shapes, use the text bounds
 		size = [shape.props.w || 100, shape.props.h || 100]
 	} else {
-		// For other shapes, use w/h properties
 		size = [shape.props.w || 100, shape.props.h || 100]
 	}
 
 	const data: Array<{ type: string; [key: string]: any }> = []
+	let scale: number | undefined
+
+	if (shape.props.scale && shape.props.scale !== 1) {
+		scale = shape.props.scale
+	}
 
 	switch (shape.type) {
 		case 'geo': {
-			// Determine the appropriate OCIF node type based on geo shape
-			let nodeType = '@ocif/node/rect'
+			let nodeType = '@ocif/rect'
 			if (shape.props.geo === 'ellipse' || shape.props.geo === 'oval') {
-				nodeType = '@ocif/node/oval'
+				nodeType = '@ocif/oval'
 			}
-			// All other geo shapes (triangle, diamond, pentagon, hexagon, octagon, star, etc.)
-			// are exported as rectangles with geo-specific metadata
 
 			const nodeData: any = {
 				type: nodeType,
@@ -731,7 +708,6 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				strokeWidth: convertTldrawSizeToPixels(shape.props.size),
 			}
 
-			// Add geo-specific metadata for non-standard shapes
 			if (
 				shape.props.geo !== 'rectangle' &&
 				shape.props.geo !== 'ellipse' &&
@@ -740,7 +716,6 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				nodeData.geoType = shape.props.geo
 			}
 
-			// Add text content if present
 			if (shape.props.text && shape.props.text.trim()) {
 				nodeData.text =
 					renderPlaintextFromRichText(editor, shape.props.richText) || shape.props.text
@@ -750,23 +725,12 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				nodeData.textAlign = shape.props.align || 'middle'
 			}
 
-			// Add node transforms extension if shape has scale
-			if (shape.props.scale && shape.props.scale !== 1) {
-				data.push({
-					type: '@ocif/node/transforms',
-					scale: shape.props.scale,
-					rotation: 0,
-					offset: [0, 0],
-				})
-			}
-
 			data.push(nodeData)
 			break
 		}
 		case 'text': {
-			// Text nodes in OCIF are represented as rectangles with text content
 			const textNodeData: any = {
-				type: '@ocif/node/rect',
+				type: '@ocif/rect',
 				strokeColor: 'transparent',
 				fillColor: 'transparent',
 				strokeWidth: 0,
@@ -774,17 +738,15 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 					? renderPlaintextFromRichText(editor, shape.props.richText)
 					: shape.props.text || '',
 				textColor: convertTldrawColorToHex(shape.props.color),
-				fontSize: convertTldrawSizeToPixels(shape.props.size) * 4, // Approximate font size
+				fontSize: convertTldrawSizeToPixels(shape.props.size) * 4,
 				fontFamily: shape.props.font || 'draw',
 				textAlign: convertTldrawTextAlignToOcif(shape.props.textAlign || 'start'),
 			}
 
-			// Add the text node data first
 			data.push(textNodeData)
 
-			// Add text style extension for rich text support
 			data.push({
-				type: '@ocif/node/textstyle',
+				type: '@ocif/textstyle',
 				fontSizePx: convertTldrawSizeToPixels(shape.props.size) * 4,
 				fontFamily: convertTldrawFontToCSS(shape.props.font || 'draw'),
 				color: convertTldrawColorToHex(shape.props.color),
@@ -793,23 +755,12 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				italic: false,
 			})
 
-			// Add node transforms extension if shape has scale
-			if (shape.props.scale && shape.props.scale !== 1) {
-				data.push({
-					type: '@ocif/node/transforms',
-					scale: shape.props.scale,
-					rotation: 0,
-					offset: [0, 0],
-				})
-			}
-
 			break
 		}
 		case 'draw': {
-			// Draw shapes are converted to path nodes
 			const pathData = convertDrawSegmentsToSvgPath(shape.props.segments)
-			const drawNodeData: any = {
-				type: '@ocif/node/path',
+			data.push({
+				type: '@ocif/path',
 				strokeColor: convertTldrawColorToHex(shape.props.color),
 				fillColor: shape.props.isClosed
 					? convertTldrawFillToHex(shape.props.fill, shape.props.color)
@@ -817,26 +768,12 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				strokeWidth: convertTldrawSizeToPixels(shape.props.size),
 				path: pathData,
 				closed: shape.props.isClosed || false,
-			}
-
-			// Add the main path data first
-			data.push(drawNodeData)
-
-			// Add node transforms extension if shape has scale
-			if (shape.props.scale && shape.props.scale !== 1) {
-				data.push({
-					type: '@ocif/node/transforms',
-					scale: shape.props.scale,
-					rotation: 0,
-					offset: [0, 0],
-				})
-			}
-
+			})
 			break
 		}
 		case 'arrow': {
 			const arrowData: any = {
-				type: '@ocif/node/arrow',
+				type: '@ocif/arrow',
 				strokeColor: convertTldrawColorToHex(shape.props.color),
 				start: [shape.props.start.x, shape.props.start.y],
 				end: [shape.props.end.x, shape.props.end.y],
@@ -845,7 +782,6 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				strokeWidth: convertTldrawSizeToPixels(shape.props.size),
 			}
 
-			// Add label properties if the arrow has text
 			const arrowText = renderPlaintextFromRichText(editor, shape.props.richText)
 			if (arrowText) {
 				arrowData.text = arrowText
@@ -854,64 +790,50 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 			}
 
 			data.push(arrowData)
-
-			// Add node transforms extension if shape has scale
-			if (shape.props.scale && shape.props.scale !== 1) {
-				data.push({
-					type: '@ocif/node/transforms',
-					scale: shape.props.scale,
-					rotation: 0,
-					offset: [0, 0],
-				})
-			}
-
 			break
 		}
 		case 'frame': {
-			// Frame shapes are represented as rectangles with special styling
 			data.push({
-				type: '@ocif/node/rect',
+				type: '@ocif/rect',
 				strokeColor: convertTldrawColorToHex(shape.props.color || 'black'),
 				fillColor: 'transparent',
 				strokeWidth: 2,
-				// Frame-specific properties
 				isFrame: true,
 				frameName: shape.props.name || '',
 			})
 			break
 		}
 		case 'image': {
-			// Images in OCIF are just nodes with resource references (no shape data)
 			const node: OcifNode = {
 				id: shape.id,
 				position,
 				size,
 				rotation: shape.rotation || 0,
-				data: [], // No shape data for pure resource nodes
+				data: [],
 			}
 			if (shape.props.assetId) {
 				node.resource = shape.props.assetId
-				node.resourceFit = 'contain' // Default fit
+				node.resourceFit = 'contain'
 			}
+			if (scale) node.scale = scale
 			return node
 		}
 		case 'video': {
-			// Videos treated like images - just resource references
 			const node: OcifNode = {
 				id: shape.id,
 				position,
 				size,
 				rotation: shape.rotation || 0,
-				data: [], // No shape data for pure resource nodes
+				data: [],
 			}
 			if (shape.props.assetId) {
 				node.resource = shape.props.assetId
-				node.resourceFit = 'contain' // Default fit
+				node.resourceFit = 'contain'
 			}
+			if (scale) node.scale = scale
 			return node
 		}
 		case 'note': {
-			// Notes (sticky notes) as custom tldraw extension
 			data.push({
 				type: '@tldraw/node/note',
 				text: shape.props.richText
@@ -926,21 +848,9 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				growY: shape.props.growY || 0,
 				url: shape.props.url || '',
 			})
-
-			// Add node transforms extension if shape has scale
-			if (shape.props.scale && shape.props.scale !== 1) {
-				data.push({
-					type: '@ocif/node/transforms',
-					scale: shape.props.scale,
-					rotation: 0,
-					offset: [0, 0],
-				})
-			}
-
 			break
 		}
 		case 'embed': {
-			// Embeds as custom tldraw extension
 			data.push({
 				type: '@tldraw/node/embed',
 				url: shape.props.url || '',
@@ -950,7 +860,6 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 			break
 		}
 		case 'bookmark': {
-			// Bookmarks as custom tldraw extension
 			let title = ''
 			let description = ''
 			let favicon = ''
@@ -970,15 +879,14 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				type: '@tldraw/node/bookmark',
 				assetId: shape.props.assetId,
 				url: shape.props.url || '',
-				title: title,
-				description: description,
-				favicon: favicon,
-				image: image,
+				title,
+				description,
+				favicon,
+				image,
 			})
 			break
 		}
 		case 'highlight': {
-			// Highlights as path nodes with special styling
 			const pathData = convertDrawSegmentsToSvgPath(shape.props.segments)
 			data.push({
 				type: '@tldraw/node/highlight',
@@ -987,21 +895,9 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				size: convertTldrawSizeToPixels(shape.props.size),
 				isComplete: shape.props.isComplete,
 			})
-
-			// Add node transforms extension if shape has scale
-			if (shape.props.scale && shape.props.scale !== 1) {
-				data.push({
-					type: '@ocif/node/transforms',
-					scale: shape.props.scale,
-					rotation: 0,
-					offset: [0, 0],
-				})
-			}
-
 			break
 		}
 		case 'line': {
-			// Lines as enhanced path support - convert points to SVG path
 			const points = Object.values(shape.props.points || {}).sort((a: any, b: any) =>
 				a.index.localeCompare(b.index)
 			)
@@ -1016,35 +912,21 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 			}
 
 			data.push({
-				type: '@ocif/node/path',
+				type: '@ocif/path',
 				strokeColor: convertTldrawColorToHex(shape.props.color),
 				fillColor: 'transparent',
 				strokeWidth: convertTldrawSizeToPixels(shape.props.size),
-				path: path,
+				path,
 				closed: false,
-				// Line-specific properties
 				spline: shape.props.spline || 'line',
 			})
-
-			// Add node transforms extension if shape has scale
-			if (shape.props.scale && shape.props.scale !== 1) {
-				data.push({
-					type: '@ocif/node/transforms',
-					scale: shape.props.scale,
-					rotation: 0,
-					offset: [0, 0],
-				})
-			}
-
 			break
 		}
 		case 'group':
-			// Groups don't have visual representation in OCIF, they're handled via relations
 			return null
 		default:
-			// For unsupported shapes, create a generic rectangle
 			data.push({
-				type: '@ocif/node/rect',
+				type: '@ocif/rect',
 				strokeColor: convertTldrawColorToHex('black'),
 				fillColor: 'transparent',
 				strokeWidth: 1,
@@ -1052,65 +934,17 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 			break
 	}
 
-	return {
+	const node: OcifNode = {
 		id: shape.id,
 		position,
 		size,
 		rotation: shape.rotation || 0,
 		data,
 	}
+	if (scale) node.scale = scale
+	return node
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers – tldraw binding → OCIF relation
-// ---------------------------------------------------------------------------
-
-function convertTldrawBindingToOcifRelation(binding: any, editor: Editor): OcifRelation | null {
-	if (binding.type === 'arrow') {
-		// Get the arrow shape to check if it has ports
-		const arrow = editor.getShape(binding.fromId)
-		const targetShape = editor.getShape(binding.toId)
-
-		if (!arrow || !targetShape) return null
-
-		// Create basic edge relation
-		const relation: OcifRelation = {
-			id: binding.id,
-			node: binding.fromId,
-			data: [
-				{
-					type: '@ocif/rel/edge',
-					start: binding.fromId,
-					end: binding.toId,
-				},
-			],
-		}
-
-		// Add ports extension if the binding has precise anchor information
-		if (binding.props.isPrecise && binding.props.normalizedAnchor) {
-			// Create a virtual port for the precise anchor
-			const portId = `port-${binding.toId}-${binding.props.terminal}`
-			const targetBounds = editor.getShapeGeometry(targetShape).bounds
-			const _portPosition: [number, number] = [
-				targetShape.x + targetBounds.minX + binding.props.normalizedAnchor.x * targetBounds.width,
-				targetShape.y +
-					targetBounds.minY +
-					binding.props.normalizedAnchor.y * targetBounds.height,
-			]
-
-			// Add ports extension to the target shape's data (conceptually)
-			relation.data.push({
-				type: '@ocif/node/ports',
-				ports: [portId],
-				terminal: binding.props.terminal,
-				normalizedAnchor: binding.props.normalizedAnchor,
-			})
-		}
-
-		return relation
-	}
-	return null
-}
 
 // ---------------------------------------------------------------------------
 // Internal helpers – tldraw asset → OCIF resource
@@ -1306,14 +1140,11 @@ function convertOcifNodeToTldrawShape(
 	altTextMap: Map<string, string>,
 	resourceTypeMap: Map<string, string>
 ): TLRecord | null {
-	const [x, y] = node.position
+	const [x, y] = node.position ?? [0, 0]
 	const [w, h] = node.size || [100, 100]
 
-	// Check for extensions in the data array
-	const transformsExtension = node.data.find((d) => d.type === '@ocif/node/transforms')
-	const textStyleExtension = node.data.find((d) => d.type === '@ocif/node/textstyle')
+	const textStyleExtension = node.data.find((d) => d.type === '@ocif/textstyle')
 
-	// Use the node's ID as the shape ID if it's already a proper shape ID format
 	const shapeId = node.id.startsWith('shape:') ? node.id : `shape:${node.id}`
 
 	const baseShape = {
@@ -1329,12 +1160,9 @@ function convertOcifNodeToTldrawShape(
 		meta: {},
 	}
 
-	// Apply transforms extension if present
 	let scale = 1
-	if (transformsExtension) {
-		scale = Array.isArray(transformsExtension.scale)
-			? transformsExtension.scale[0]
-			: transformsExtension.scale || 1
+	if (node.scale != null) {
+		scale = Array.isArray(node.scale) ? node.scale[0] : node.scale
 	}
 
 	// Handle nodes with empty data arrays (pure resource nodes)
@@ -1386,8 +1214,7 @@ function convertOcifNodeToTldrawShape(
 	if (!primaryData) return null
 
 	switch (primaryData.type) {
-		case '@ocif/node/rect':
-			// Check if this is a text node, image node, or frame
+		case '@ocif/rect':
 			if (primaryData.text && primaryData.strokeColor === 'transparent' && primaryData.strokeWidth === 0) {
 				// This is a pure text node (transparent stroke, zero width)
 				const fontSize = textStyleExtension?.fontSizePx || primaryData.fontSize || 12
@@ -1468,7 +1295,7 @@ function convertOcifNodeToTldrawShape(
 
 			return null
 
-		case '@ocif/node/oval': {
+		case '@ocif/oval': {
 			const props: any = {
 				geo: 'ellipse',
 				color: convertHexToTldrawColor(primaryData.strokeColor),
@@ -1496,8 +1323,7 @@ function convertOcifNodeToTldrawShape(
 			} as any
 		}
 
-		case '@ocif/node/path': {
-			// Convert path to draw shape
+		case '@ocif/path': {
 			const segments = convertSvgPathToDrawSegments(primaryData.path || '')
 			const props: any = {
 				segments,
@@ -1520,7 +1346,7 @@ function convertOcifNodeToTldrawShape(
 			} as any
 		}
 
-		case '@ocif/node/arrow':
+		case '@ocif/arrow':
 			return {
 				...baseShape,
 				type: 'arrow',
@@ -1698,43 +1524,6 @@ function convertOcifNodeToTldrawShape(
 	return null
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers – OCIF relation → tldraw binding
-// ---------------------------------------------------------------------------
-
-function convertOcifRelationToTldrawBinding(relation: OcifRelation): TLRecord | null {
-	const primaryData = relation.data[0]
-	if (!primaryData) return null
-
-	if (primaryData.type === '@ocif/rel/edge') {
-		// Ensure binding ID has proper format
-		const bindingId = relation.id.startsWith('binding:') ? relation.id : `binding:${relation.id}`
-
-		// Ensure shape IDs have proper format
-		const fromId = primaryData.start.startsWith('shape:')
-			? primaryData.start
-			: `shape:${primaryData.start}`
-		const toId = primaryData.end.startsWith('shape:') ? primaryData.end : `shape:${primaryData.end}`
-
-		return {
-			id: bindingId,
-			typeName: 'binding',
-			type: 'arrow',
-			fromId,
-			toId,
-			meta: {},
-			props: {
-				terminal: 'end',
-				normalizedAnchor: { x: 0.5, y: 0.5 },
-				isExact: false,
-				isPrecise: false,
-				snap: 'none',
-			},
-		} as any
-	}
-
-	return null
-}
 
 // ---------------------------------------------------------------------------
 // Color conversion helpers
@@ -1942,96 +1731,160 @@ function convertSvgPathToDrawSegments(svgPath: string): any[] {
 function getOcifSchemas(): OcifSchema[] {
 	return [
 		{
-			name: '@ocif/node/rect',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/rect-node.json',
+			name: '@ocif/rect',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/rect.json',
 			schema: {
 				type: 'object',
 				properties: {
-					type: { const: '@ocif/node/rect' },
-					strokeColor: { type: 'string' },
+					type: { const: '@ocif/rect' },
+					strokeColor: { type: 'string', default: '#FFFFFF' },
 					fillColor: { type: 'string' },
-					strokeWidth: { type: 'number' },
-					text: { type: 'string' },
-					textColor: { type: 'string' },
-					fontSize: { type: 'number' },
-					fontFamily: { type: 'string' },
-					textAlign: { type: 'string' },
+					strokeWidth: { type: 'number', default: 1 },
 				},
 			},
 		},
 		{
-			name: '@ocif/node/oval',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/oval-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/oval-node.json',
+			name: '@ocif/oval',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/oval.json',
 			schema: {
 				type: 'object',
 				properties: {
-					type: { const: '@ocif/node/oval' },
-					strokeColor: { type: 'string' },
+					type: { const: '@ocif/oval' },
+					strokeColor: { type: 'string', default: '#FFFFFF' },
 					fillColor: { type: 'string' },
-					strokeWidth: { type: 'number' },
+					strokeWidth: { type: 'number', default: 1 },
 				},
 			},
 		},
 		{
-			name: '@ocif/node/path',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/path-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/path-node.json',
+			name: '@ocif/path',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/path.json',
 			schema: {
 				type: 'object',
 				properties: {
-					type: { const: '@ocif/node/path' },
-					strokeColor: { type: 'string' },
+					type: { const: '@ocif/path' },
+					strokeColor: { type: 'string', default: '#FFFFFF' },
 					fillColor: { type: 'string' },
-					strokeWidth: { type: 'number' },
+					strokeWidth: { type: 'number', default: 1 },
 					path: { type: 'string' },
-					closed: { type: 'boolean' },
 				},
 			},
 		},
 		{
-			name: '@ocif/node/arrow',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/arrow-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/arrow-node.json',
+			name: '@ocif/arrow',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/arrow.json',
 			schema: {
 				type: 'object',
 				properties: {
-					type: { const: '@ocif/node/arrow' },
-					strokeColor: { type: 'string' },
+					type: { const: '@ocif/arrow' },
+					strokeColor: { type: 'string', default: '#FFFFFF' },
+					strokeWidth: { type: 'number', default: 1 },
 					start: { type: 'array', items: { type: 'number' } },
 					end: { type: 'array', items: { type: 'number' } },
-					startMarker: { type: 'string' },
-					endMarker: { type: 'string' },
-					strokeWidth: { type: 'number' },
-					text: { type: 'string' },
-					labelColor: { type: 'string' },
-					labelPosition: { type: 'number' },
+					startMarker: { type: 'string', default: 'none' },
+					endMarker: { type: 'string', default: 'none' },
 				},
 			},
 		},
 		{
-			name: '@ocif/rel/edge',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/edge-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/edge-rel.json',
+			name: '@ocif/edge',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/edge.json',
 			schema: {
 				type: 'object',
 				properties: {
-					type: { const: '@ocif/rel/edge' },
+					type: { const: '@ocif/edge' },
 					start: { type: 'string' },
 					end: { type: 'string' },
+					directed: { type: 'boolean', default: true },
+					rel: { type: 'string' },
 				},
 			},
 		},
 		{
-			name: '@ocif/rel/group',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/group-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/group-rel.json',
+			name: '@ocif/group',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/group.json',
 			schema: {
 				type: 'object',
 				properties: {
-					type: { const: '@ocif/rel/group' },
+					type: { const: '@ocif/group' },
 					members: { type: 'array', items: { type: 'string' } },
+					cascadeDelete: { type: 'boolean' },
+				},
+			},
+		},
+		{
+			name: '@ocif/hyperedge',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/hyperedge.json',
+			schema: {
+				type: 'object',
+				properties: {
+					type: { const: '@ocif/hyperedge' },
+					endpoints: {
+						type: 'array',
+						items: {
+							type: 'object',
+							properties: {
+								id: { type: 'string' },
+								direction: { type: 'string', enum: ['in', 'out', 'undir'], default: 'undir' },
+								weight: { type: 'number', default: 1.0 },
+							},
+						},
+					},
+					weight: { type: 'number', default: 1.0 },
+					rel: { type: 'string' },
+				},
+			},
+		},
+		{
+			name: '@ocif/textstyle',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/textstyle.json',
+			schema: {
+				type: 'object',
+				properties: {
+					type: { const: '@ocif/textstyle' },
+					fontSizePx: { type: 'number', default: 12 },
+					fontFamily: { type: 'string', default: 'sans-serif' },
+					color: { type: 'string', default: '#000000' },
+					align: { type: 'string', enum: ['left', 'right', 'center', 'justify'], default: 'left' },
+					bold: { type: 'boolean', default: false },
+					italic: { type: 'boolean', default: false },
+				},
+			},
+		},
+		{
+			name: '@ocif/ports',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/ports.json',
+			schema: {
+				type: 'object',
+				properties: {
+					type: { const: '@ocif/ports' },
+					ports: { type: 'array', items: { type: 'string' } },
+				},
+			},
+		},
+		{
+			name: '@ocif/inherit',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/inherit.json',
+			schema: {
+				type: 'object',
+				properties: {
+					type: { const: '@ocif/inherit' },
+					inheritFrom: { type: 'string' },
+					include: { type: 'array', items: { type: 'string' } },
+					exclude: { type: 'array', items: { type: 'string' } },
+				},
+			},
+		},
+		{
+			name: '@ocif/global-positions',
+			uri: 'https://spec.canvasprotocol.org/v0.7.0/extensions/global-positions.json',
+			schema: {
+				type: 'object',
+				properties: {
+					type: { const: '@ocif/global-positions' },
+					globalPosition: { type: 'array', items: { type: 'number' } },
+					globalSize: { type: 'array', items: { type: 'number' } },
+					globalRotation: { type: 'number', default: 0 },
 				},
 			},
 		},
@@ -2039,7 +1892,6 @@ function getOcifSchemas(): OcifSchema[] {
 		{
 			name: '@tldraw/node/note',
 			uri: 'https://tldraw.com/schemas/note-node.json',
-			location: 'https://tldraw.com/schemas/note-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2059,7 +1911,6 @@ function getOcifSchemas(): OcifSchema[] {
 		{
 			name: '@tldraw/node/embed',
 			uri: 'https://tldraw.com/schemas/embed-node.json',
-			location: 'https://tldraw.com/schemas/embed-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2073,7 +1924,6 @@ function getOcifSchemas(): OcifSchema[] {
 		{
 			name: '@tldraw/node/bookmark',
 			uri: 'https://tldraw.com/schemas/bookmark-node.json',
-			location: 'https://tldraw.com/schemas/bookmark-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2090,7 +1940,6 @@ function getOcifSchemas(): OcifSchema[] {
 		{
 			name: '@tldraw/node/highlight',
 			uri: 'https://tldraw.com/schemas/highlight-node.json',
-			location: 'https://tldraw.com/schemas/highlight-node.json',
 			schema: {
 				type: 'object',
 				properties: {
@@ -2099,90 +1948,6 @@ function getOcifSchemas(): OcifSchema[] {
 					color: { type: 'string' },
 					size: { type: 'number' },
 					isComplete: { type: 'boolean' },
-				},
-			},
-		},
-		// OCIF v0.6 Extensions
-		{
-			name: '@ocif/node/ports',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/ports-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/ports-node.json',
-			schema: {
-				type: 'object',
-				properties: {
-					type: { const: '@ocif/node/ports' },
-					ports: { type: 'array', items: { type: 'string' } },
-				},
-			},
-		},
-		{
-			name: '@ocif/node/transforms',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/transforms-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/transforms-node.json',
-			schema: {
-				type: 'object',
-				properties: {
-					type: { const: '@ocif/node/transforms' },
-					scale: { type: ['number', 'array'] },
-					rotation: { type: 'number' },
-					rotationAxis: { type: 'array', items: { type: 'number' } },
-					offset: { type: ['number', 'array'] },
-				},
-			},
-		},
-		{
-			name: '@ocif/node/textstyle',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/textstyle-node.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/textstyle-node.json',
-			schema: {
-				type: 'object',
-				properties: {
-					type: { const: '@ocif/node/textstyle' },
-					fontSizePx: { type: 'number' },
-					fontFamily: { type: 'string' },
-					color: { type: 'string' },
-					align: { type: 'string', enum: ['left', 'right', 'center', 'justify'] },
-					bold: { type: 'boolean' },
-					italic: { type: 'boolean' },
-				},
-			},
-		},
-		{
-			name: '@ocif/rel/parent-child',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/parent-child-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/parent-child-rel.json',
-			schema: {
-				type: 'object',
-				properties: {
-					type: { const: '@ocif/rel/parent-child' },
-					parent: { type: 'string' },
-					child: { type: 'string' },
-					inherit: { type: 'boolean' },
-					cascadeDelete: { type: 'boolean' },
-				},
-			},
-		},
-		{
-			name: '@ocif/rel/hyperedge',
-			uri: 'https://spec.canvasprotocol.org/v0.6/extensions/hyperedge-rel.json',
-			location: 'https://spec.canvasprotocol.org/v0.6/extensions/hyperedge-rel.json',
-			schema: {
-				type: 'object',
-				properties: {
-					type: { const: '@ocif/rel/hyperedge' },
-					endpoints: {
-						type: 'array',
-						items: {
-							type: 'object',
-							properties: {
-								id: { type: 'string' },
-								direction: { type: 'string', enum: ['in', 'out', 'undir'] },
-								weight: { type: 'number' },
-							},
-						},
-					},
-					weight: { type: 'number' },
-					rel: { type: 'string' },
 				},
 			},
 		},
