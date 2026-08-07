@@ -10,6 +10,7 @@ export {
 	// Serialize (tldraw → OCIF)
 	serializeTldrawToOcif,
 	serializeTldrawToOcifBlob,
+	serializeTldrawRecordsToOcif,
 	// Parse (OCIF → tldraw)
 	parseOcifFile,
 	parseAndLoadOcifFile,
