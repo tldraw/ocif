@@ -1281,6 +1281,8 @@ function convertOcifNodeToTldrawShape(
 						? convertHexToTldrawColor(primaryData.textColor)
 						: 'black',
 					richText: primaryData.text ? toRichText(primaryData.text) : toRichText(''),
+					flipX: false,
+					flipY: false,
 				}
 
 				// Always add scale property (tldraw schema requires it)
@@ -1311,6 +1313,8 @@ function convertOcifNodeToTldrawShape(
 				dash: 'draw',
 				labelColor: 'black',
 				richText: toRichText(''),
+				flipX: false,
+				flipY: false,
 			}
 
 			// Always add scale property (tldraw schema requires it)
@@ -1412,6 +1416,7 @@ function convertOcifNodeToTldrawShape(
 				url: primaryData.url || '',
 				fontSizeAdjustment: primaryData.fontSizePx !== undefined ? primaryData.fontSizePx : 0,
 				scale: scale,
+				textLastEditedBy: null,
 			}
 
 			return {
@@ -1517,6 +1522,8 @@ function convertOcifNodeToTldrawShape(
 					labelColor: 'black',
 					scale: scale,
 					richText: toRichText(''),
+					flipX: false,
+					flipY: false,
 				},
 			} as any
 	}
