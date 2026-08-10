@@ -2,7 +2,7 @@
 
 [OCIF (Open Canvas Interchange Format)](https://github.com/ocwg/spec) plugin for [tldraw](https://tldraw.dev) — import and export canvases using the OCWG specification.
 
-> **Status**: Implements OCIF v0.7.0
+> **Status**: Implements OCIF v0.7.0 · Requires tldraw v5.3+
 
 ## Install
 
@@ -10,7 +10,7 @@
 npm install tldraw-ocif tldraw
 ```
 
-`tldraw` is a **peer dependency** — make sure it's installed in your project.
+`tldraw` (v5.3 or later) is a **peer dependency** — make sure it's installed in your project. The `@tldraw/tlschema` and `@tldraw/utils` packages are also peer dependencies, but they ship with `tldraw`, so package managers resolve them automatically.
 
 ## Quick start
 
@@ -37,6 +37,9 @@ a.click()
 import { parseAndLoadOcifFile } from 'tldraw-ocif'
 
 const ocifContent = await file.text()
+await parseAndLoadOcifFile(editor, ocifContent)
+
+// Optionally pass an i18n lookup and a toast handler for error reporting:
 await parseAndLoadOcifFile(editor, ocifContent, msg, addToast)
 ```
 
@@ -62,8 +65,9 @@ if (result.ok) {
 | --- | --- |
 | `serializeTldrawToOcif(editor)` | Export the current page to an OCIF v0.7.0 JSON string |
 | `serializeTldrawToOcifBlob(editor)` | Export to a `Blob` with the correct MIME type |
+| `serializeTldrawRecordsToOcif(records, opts?)` | Export tldraw records headlessly (no `Editor` needed) |
 | `parseOcifFile({ json, schema })` | Parse OCIF JSON → `Result<TLStore, OcifFileParseError>` |
-| `parseAndLoadOcifFile(editor, json, msg, addToast)` | Parse and load OCIF directly into a tldraw editor |
+| `parseAndLoadOcifFile(editor, json, msg?, addToast?)` | Parse and load OCIF directly into a tldraw editor |
 | `OCIF_FILE_MIMETYPE` | `'application/vnd.ocif+json'` |
 | `OCIF_FILE_EXTENSION` | `'.ocif.json'` |
 
@@ -100,12 +104,21 @@ OcifFileParseError
 
 ### Layout
 
-- `@ocif/ports` — precise anchor points for arrow bindings
-- Node `scale` property — scale factor (v0.7.0 core property)
+- Node `scale` property — uniform scale factor (v0.7.0 core property; array scales use the first component)
+- Node `rotation` property — degrees per the spec, converted to/from tldraw's radians
 
 ### Resources
 
-- Image, video, and bookmark assets with representations
+- Image, video, and bookmark assets with representations (first representation is the default, later ones are fallbacks, per the spec)
+
+### Interoperability
+
+- Unknown node extensions are preserved on import (in `shape.meta`) and re-exported unchanged, as required by the OCIF spec
+
+### Not yet implemented
+
+- `@ocif/ports` anchor points (schema registered, but arrow bindings use center anchors)
+- `@ocif/inherit`, `@ocif/global-positions`, `rootNode`, `rotationAxis`, non-uniform `scale`
 
 ### tldraw-specific extensions
 

@@ -1,3 +1,5 @@
+import { b64Vecs } from '@tldraw/tlschema'
+import { getIndices, sortByIndex } from '@tldraw/utils'
 import {
 	AssetRecordType,
 	Editor,
@@ -12,7 +14,7 @@ import {
 } from 'tldraw'
 
 // ---------------------------------------------------------------------------
-// Rich-text helper
+// Rich-text helpers
 // ---------------------------------------------------------------------------
 
 /**
@@ -21,7 +23,7 @@ import {
  * We keep our own lightweight implementation so that we don't depend on
  * internal tldraw utilities that may not be exported from the public API.
  */
-function renderPlaintextFromRichText(_editor: Editor, richText: any): string {
+function renderPlaintextFromRichText(richText: any): string {
 	if (!richText) return ''
 
 	function extractText(node: any): string {
@@ -43,6 +45,34 @@ function renderPlaintextFromRichText(_editor: Editor, richText: any): string {
 	}
 
 	return extractText(richText)
+}
+
+/** Whether any text node in the rich text carries the given mark (e.g. 'bold', 'italic'). */
+function richTextHasMark(richText: any, markType: string): boolean {
+	if (!richText) return false
+
+	function walk(node: any): boolean {
+		if (!node) return false
+		if (Array.isArray(node.marks) && node.marks.some((m: any) => m?.type === markType)) {
+			return true
+		}
+		if (Array.isArray(node.content)) return node.content.some(walk)
+		return false
+	}
+
+	return walk(richText)
+}
+
+// ---------------------------------------------------------------------------
+// Angle helpers — OCIF stores rotation in degrees, tldraw in radians
+// ---------------------------------------------------------------------------
+
+function radiansToDegrees(radians: number): number {
+	return (radians * 180) / Math.PI
+}
+
+function degreesToRadians(degrees: number): number {
+	return (degrees * Math.PI) / 180
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +109,7 @@ export interface OcifNode {
 	parent?: string
 	deleteWithParent?: boolean
 	comment?: string
-	data: Array<{
+	data?: Array<{
 		type: string
 		[key: string]: any
 	}>
@@ -123,114 +153,170 @@ export type OcifFileParseError =
 
 /** @public */
 export async function serializeTldrawToOcif(editor: Editor): Promise<string> {
-	const records = editor.store.allRecords()
+	return serializeTldrawRecordsToOcif(editor.store.allRecords(), {
+		pageId: editor.getCurrentPageId(),
+		resolveAssetSrc: async (asset) => {
+			let src = asset.props.src
+			if (!src || src.startsWith('data:')) return src
+			try {
+				if (!src.startsWith('http')) {
+					src = (await editor.resolveAssetUrl(asset.id, { shouldResolveToOriginal: true })) || ''
+				}
+				// Convert to base64 data URL for portability (same as TLDR export)
+				return await FileHelpers.blobToDataUrl(await (await fetch(src)).blob())
+			} catch {
+				// If conversion fails, keep the original src
+				return asset.props.src
+			}
+		},
+	})
+}
+
+/**
+ * Serialize a set of tldraw records to an OCIF JSON string without needing an
+ * `Editor` instance. Only shapes on `opts.pageId` (or the document's first
+ * page) are exported, in z-order.
+ *
+ * @public
+ */
+export async function serializeTldrawRecordsToOcif(
+	records: TLRecord[],
+	opts: {
+		pageId?: string
+		resolveAssetSrc?: (asset: any) => Promise<string | undefined>
+	} = {}
+): Promise<string> {
 	const nodes: OcifNode[] = []
 	const resources: OcifResource[] = []
 	const usedSchemaTypes = new Set<string>()
 
-	// Build a map of arrow shape IDs → their bindings for edge extensions
-	const arrowBindings = new Map<string, Array<{ fromId: string; toId: string; bindingId: string }>>()
+	const shapesById = new Map<string, any>()
+	const assetsById = new Map<string, any>()
+	for (const record of records) {
+		if (record.typeName === 'shape') shapesById.set(record.id, record)
+		if (record.typeName === 'asset') assetsById.set(record.id, record)
+	}
+
+	// Determine the page to export: explicit, else the document's first page.
+	const firstPage = (records.filter((r) => r.typeName === 'page') as any[]).sort(sortByIndex)[0]
+	const pageId: string = opts.pageId ?? firstPage?.id ?? 'page:page'
+
+	// Group shapes by parent so we can walk the current page's subtree in
+	// z-order (siblings sorted by fractional index, parents before children).
+	const childrenByParent = new Map<string, any[]>()
+	for (const shape of shapesById.values()) {
+		const parentId = shape.parentId ?? pageId
+		if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, [])
+		childrenByParent.get(parentId)!.push(shape)
+	}
+
+	const orderedShapes: Array<{ shape: any; pageX: number; pageY: number }> = []
+	const visit = (parentId: string, originX: number, originY: number) => {
+		const children = childrenByParent.get(parentId)
+		if (!children) return
+		for (const shape of children.slice().sort(sortByIndex)) {
+			const pageX = originX + shape.x
+			const pageY = originY + shape.y
+			orderedShapes.push({ shape, pageX, pageY })
+			visit(shape.id, pageX, pageY)
+		}
+	}
+	visit(pageId, 0, 0)
+
+	// Collect arrow bindings per arrow shape, keeping which terminal each
+	// binding attaches to so the edge direction survives the round trip.
+	const arrowTerminals = new Map<string, { start?: string; end?: string }>()
 	for (const record of records) {
 		if (record.typeName === 'binding' && (record as any).type === 'arrow') {
 			const binding = record as any
-			const fromId = binding.fromId
-			if (!arrowBindings.has(fromId)) {
-				arrowBindings.set(fromId, [])
+			const entry = arrowTerminals.get(binding.fromId) ?? {}
+			if (binding.props?.terminal === 'start') {
+				entry.start = binding.toId
+			} else {
+				entry.end = binding.toId
 			}
-			arrowBindings.get(fromId)!.push({
-				fromId: binding.fromId,
-				toId: binding.toId,
-				bindingId: binding.id,
-			})
+			arrowTerminals.set(binding.fromId, entry)
 		}
 	}
 
-	// Collect group membership: groupId → memberIds
-	const groupsToMembers = new Map<string, string[]>()
-	for (const record of records) {
-		if (
-			record.typeName === 'shape' &&
-			(record as any).parentId &&
-			(record as any).parentId !== editor.getCurrentPageId()
-		) {
-			const parentShape = editor.getShape((record as any).parentId)
-			if (parentShape?.type === 'group') {
-				const groupId = (record as any).parentId
-				if (!groupsToMembers.has(groupId)) {
-					groupsToMembers.set(groupId, [])
-				}
-				groupsToMembers.get(groupId)!.push(record.id)
+	for (const { shape, pageX, pageY } of orderedShapes) {
+		const parentShape = shape.parentId ? shapesById.get(shape.parentId) : undefined
+
+		// Groups become nodes with @ocif/group extension
+		if (shape.type === 'group') {
+			const members = (childrenByParent.get(shape.id) ?? []).map((s) => s.id)
+			if (members.length > 0) {
+				nodes.push({
+					id: shape.id,
+					position: [pageX, pageY],
+					data: [
+						{
+							type: '@ocif/group',
+							members,
+							cascadeDelete: true,
+						},
+					],
+				})
+				usedSchemaTypes.add('@ocif/group')
+			}
+			continue
+		}
+
+		// Children of frames keep frame-relative positions (OCIF `parent`
+		// containment semantics); everything else is exported in page space.
+		const useRelativePosition = parentShape?.type === 'frame'
+		const node = convertTldrawShapeToOcifNode(
+			shape,
+			useRelativePosition ? [shape.x, shape.y] : [pageX, pageY],
+			assetsById
+		)
+		if (!node) continue
+		node.data = node.data ?? []
+
+		// Re-emit extensions we don't understand, unchanged (OCIF requires
+		// unknown extensions to survive the round trip).
+		const preserved = Array.isArray(shape.meta?.ocifExtensions) ? shape.meta.ocifExtensions : null
+		if (preserved) {
+			if (shape.meta?.ocifUnknownPrimary) {
+				// This shape was only ever a placeholder — restore the
+				// original data instead of exporting the placeholder rect.
+				node.data = [...preserved]
+			} else {
+				node.data.push(...preserved)
 			}
 		}
-	}
 
-	// Convert shapes to nodes
-	for (const record of records) {
-		if (record.typeName === 'shape') {
-			const shape = record as any
-
-			// Groups become nodes with @ocif/group extension
-			if (shape.type === 'group') {
-				const members = groupsToMembers.get(shape.id)
-				if (members && members.length > 0) {
-					const groupNode: OcifNode = {
-						id: shape.id,
-						position: [shape.x, shape.y],
-						data: [
-							{
-								type: '@ocif/group',
-								members,
-								cascadeDelete: true,
-							},
-						],
-					}
-					nodes.push(groupNode)
-					usedSchemaTypes.add('@ocif/group')
-				}
-				continue
-			}
-
-			const node = convertTldrawShapeToOcifNode(shape, editor)
-			if (node) {
-				// Add edge extensions for arrow bindings
-				const bindings = arrowBindings.get(shape.id)
-				if (bindings) {
-					for (const b of bindings) {
-						node.data.push({
-							type: '@ocif/edge',
-							start: b.fromId,
-							end: b.toId,
-						})
-						usedSchemaTypes.add('@ocif/edge')
-					}
-				}
-
-				// Set parent property for frame/group containment
-				if (shape.parentId && shape.parentId !== editor.getCurrentPageId()) {
-					const parentShape = editor.getShape(shape.parentId)
-					if (parentShape) {
-						node.parent = shape.parentId
-					}
-				}
-
-				nodes.push(node)
-				node.data.forEach((d) => usedSchemaTypes.add(d.type))
-			}
+		// One edge extension per arrow, with start/end pointing at the nodes
+		// bound at the arrow's start/end terminals.
+		const terminals = arrowTerminals.get(shape.id)
+		if (terminals && (terminals.start || terminals.end)) {
+			const edge: any = { type: '@ocif/edge' }
+			if (terminals.start) edge.start = terminals.start
+			if (terminals.end) edge.end = terminals.end
+			node.data.push(edge)
+			usedSchemaTypes.add('@ocif/edge')
 		}
+
+		if (useRelativePosition) {
+			node.parent = shape.parentId
+		}
+
+		nodes.push(node)
+		node.data.forEach((d) => usedSchemaTypes.add(d.type))
 	}
 
 	// Collect referenced resources
 	const referencedResourceIds = new Set<string>()
 	for (const node of nodes) {
 		if (node.resource) referencedResourceIds.add(node.resource)
-		for (const d of node.data) {
+		for (const d of node.data ?? []) {
 			if (d.assetId) referencedResourceIds.add(d.assetId)
 		}
 	}
 
 	for (const record of records) {
 		if (record.typeName === 'asset' && referencedResourceIds.has(record.id)) {
-			const resource = await convertTldrawAssetToOcifResource(record as any, editor)
+			const resource = await convertTldrawAssetToOcifResource(record as any, opts.resolveAssetSrc)
 			if (resource) resources.push(resource)
 		}
 	}
@@ -276,7 +362,8 @@ export function parseOcifFile({
 		return Result.err({ type: 'notAnOcifFile', cause: e })
 	}
 
-	if (!data.ocif.includes('v0.7')) {
+	// Accept v0.7 and v0.7.x only, anchored to the end of the version URI.
+	if (!/(^|\/)v0\.7(\.\d+)?$/.test(data.ocif)) {
 		return Result.err({ type: 'ocifVersionNotSupported', version: data.ocif })
 	}
 
@@ -287,12 +374,14 @@ export function parseOcifFile({
 		const groupRelations = new Map<string, string[]>()
 		const parentChildRelations = new Map<string, string>()
 		const hyperedgeNodes: OcifNode[] = []
-		const edgeRelations: Array<{ nodeId: string; start: string; end: string }> = []
+		const edgesByNode = new Map<string, Array<{ start?: string; end?: string }>>()
 
 		// Convert OCIF resources to TLDraw assets
 		const resourceTypeMap = new Map<string, string>()
 		if (data.resources) {
 			for (const resource of data.resources) {
+				// First occurrence wins on duplicate resource IDs
+				if (assetMap.has(resource.id)) continue
 				const assetResult = convertOcifResourceToTldrawAsset(resource)
 				if (assetResult) {
 					records.push(assetResult.asset)
@@ -311,11 +400,12 @@ export function parseOcifFile({
 				parentChildRelations.set(node.id, node.parent)
 			}
 
-			for (const d of node.data) {
+			for (const d of node.data ?? []) {
 				if (d.type === '@ocif/group') {
 					groupRelations.set(node.id, d.members || [])
 				} else if (d.type === '@ocif/edge') {
-					edgeRelations.push({ nodeId: node.id, start: d.start, end: d.end })
+					if (!edgesByNode.has(node.id)) edgesByNode.set(node.id, [])
+					edgesByNode.get(node.id)!.push({ start: d.start, end: d.end })
 				} else if (d.type === '@ocif/hyperedge') {
 					hyperedgeNodes.push(node)
 				}
@@ -323,79 +413,53 @@ export function parseOcifFile({
 		}
 
 		// Convert OCIF nodes to TLDraw shapes
-		const structuralOnlyTypes = new Set(['@ocif/group', '@ocif/hyperedge', '@ocif/edge', '@ocif/inherit'])
+		const shapeRecordsById = new Map<string, any>()
+		const structuralOnlyTypes = new Set([
+			'@ocif/group',
+			'@ocif/hyperedge',
+			'@ocif/edge',
+			'@ocif/inherit',
+		])
 		for (const node of data.nodes ?? []) {
-			// Skip nodes that are purely structural (no visual representation)
-			const isStructuralOnly = node.data.length > 0 && node.data.every((d) => structuralOnlyTypes.has(d.type))
+			// Skip nodes that are purely structural (no visual representation).
+			// Pure edge/hyperedge nodes get synthesized arrows further below.
+			const nodeData = node.data ?? []
+			const isStructuralOnly =
+				nodeData.length > 0 && nodeData.every((d) => structuralOnlyTypes.has(d.type))
 			if (isStructuralOnly) continue
 
 			const shapeRecord = convertOcifNodeToTldrawShape(node, assetMap, altTextMap, resourceTypeMap)
-			if (shapeRecord) {
-				const parentId = parentChildRelations.get(node.id)
-				if (parentId) {
-					const parentShapeId = parentId.startsWith('shape:') ? parentId : `shape:${parentId}`
-					;(shapeRecord as any).parentId = parentShapeId
-				}
+			// First occurrence wins on duplicate node IDs instead of silently
+			// overwriting earlier records in the store snapshot.
+			if (shapeRecord && !shapeRecordsById.has(shapeRecord.id)) {
 				records.push(shapeRecord)
+				shapeRecordsById.set(shapeRecord.id, shapeRecord)
 			}
 		}
+		const toShapeId = (id: string) => (id.startsWith('shape:') ? id : `shape:${id}`)
 
-		// Create frame shapes from parent-child relations
-		const frameIds = new Set<string>()
-		for (const [_childId, parentId] of parentChildRelations) {
-			if (!frameIds.has(parentId)) {
-				frameIds.add(parentId)
-				const parentNode = (data.nodes ?? []).find((n) => n.id === parentId)
-				if (parentNode) {
-					const frameData = parentNode.data.find((d) => d.isFrame)
-					if (frameData) {
-						const frameShapeId = parentId.startsWith('shape:') ? parentId : `shape:${parentId}`
-						const pos = parentNode.position ?? [0, 0]
-						const frameShape = {
-							id: frameShapeId,
-							typeName: 'shape' as const,
-							type: 'frame',
-							x: pos[0],
-							y: pos[1],
-							rotation: parentNode.rotation || 0,
-							index: 'a1' as any,
-							parentId: 'page:page' as any,
-							isLocked: false,
-							opacity: 1,
-							meta: {},
-							props: {
-								w: parentNode.size?.[0] || 200,
-								h: parentNode.size?.[1] || 200,
-								name: frameData.frameName || '',
-								color: convertHexToTldrawColor(frameData.strokeColor || '#000000'),
-							},
-						} as any
-						records.push(frameShape)
-					}
-				}
+		// Apply frame containment (`parent` property), only for parents that exist
+		for (const [childId, parentId] of parentChildRelations) {
+			const child = shapeRecordsById.get(toShapeId(childId))
+			const parent = shapeRecordsById.get(toShapeId(parentId))
+			if (child && parent) {
+				child.parentId = parent.id
 			}
 		}
 
 		// Create group shapes and set up parent-child relationships
 		for (const [groupId, memberIds] of groupRelations) {
-			const groupShapeId = groupId.startsWith('shape:') ? groupId : `shape:${groupId}`
+			const groupShapeId = toShapeId(groupId)
 
 			let minX = Infinity,
-				minY = Infinity,
-				maxX = -Infinity,
-				maxY = -Infinity
+				minY = Infinity
 			const memberShapes = memberIds
-				.map((id) => {
-					const shapeId = id.startsWith('shape:') ? id : `shape:${id}`
-					return records.find((r) => r.id === shapeId && r.typeName === 'shape') as any
-				})
+				.map((id) => shapeRecordsById.get(toShapeId(id)))
 				.filter(Boolean)
 
 			for (const shape of memberShapes) {
 				minX = Math.min(minX, shape.x)
 				minY = Math.min(minY, shape.y)
-				maxX = Math.max(maxX, shape.x + (shape.props.w || 100))
-				maxY = Math.max(maxY, shape.y + (shape.props.h || 100))
 			}
 
 			if (memberShapes.length > 0) {
@@ -419,7 +483,10 @@ export function parseOcifFile({
 					props: {},
 				} as any
 				records.push(groupShape)
+				shapeRecordsById.set(groupShapeId, groupShape)
 
+				// OCIF member positions are absolute; tldraw children are
+				// relative to their group parent.
 				for (const shape of memberShapes) {
 					shape.parentId = groupShapeId
 					shape.x -= groupX
@@ -428,9 +495,144 @@ export function parseOcifFile({
 			}
 		}
 
-		// Process hyperedge nodes
+		// --- Edge and hyperedge reconstruction -----------------------------
+
+		const centerOf = (id: string): { x: number; y: number } | null => {
+			const rec = shapeRecordsById.get(toShapeId(id))
+			if (!rec) return null
+			return {
+				x: rec.x + (rec.props?.w ?? 100) / 2,
+				y: rec.y + (rec.props?.h ?? 100) / 2,
+			}
+		}
+
+		const pushArrowBinding = (id: string, fromId: string, toId: string, terminal: 'start' | 'end') => {
+			records.push({
+				id,
+				typeName: 'binding',
+				type: 'arrow',
+				fromId,
+				toId,
+				meta: {},
+				props: {
+					terminal,
+					normalizedAnchor: { x: 0.5, y: 0.5 },
+					isExact: false,
+					isPrecise: false,
+					snap: 'none',
+				},
+			} as any)
+		}
+
+		// Synthesize a visible arrow shape connecting two nodes, bound at both
+		// terminals. Used for pure structural edges and hyperedges, which have
+		// no visual representation of their own in the OCIF file.
+		const synthesizeArrow = (idBase: string, startId: string, endId: string): boolean => {
+			const startCenter = centerOf(startId)
+			const endCenter = centerOf(endId)
+			if (!startCenter || !endCenter) return false
+
+			const arrowShapeId = toShapeId(idBase)
+			if (shapeRecordsById.has(arrowShapeId)) return false
+
+			const arrowShape = {
+				id: arrowShapeId,
+				typeName: 'shape' as const,
+				type: 'arrow',
+				x: startCenter.x,
+				y: startCenter.y,
+				rotation: 0,
+				index: 'a1' as any,
+				parentId: 'page:page' as any,
+				isLocked: false,
+				opacity: 1,
+				meta: {},
+				props: {
+					kind: 'arc',
+					color: 'black',
+					labelColor: 'black',
+					fill: 'none',
+					dash: 'draw',
+					size: 'm',
+					arrowheadStart: 'none',
+					arrowheadEnd: 'arrow',
+					font: 'draw',
+					start: { x: 0, y: 0 },
+					end: { x: endCenter.x - startCenter.x, y: endCenter.y - startCenter.y },
+					bend: 0,
+					richText: toRichText(''),
+					labelPosition: 0.5,
+					scale: 1,
+					elbowMidPoint: 0,
+				},
+			} as any
+			records.push(arrowShape)
+			shapeRecordsById.set(arrowShapeId, arrowShape)
+
+			pushArrowBinding(`binding:${idBase}-start`, arrowShapeId, toShapeId(startId), 'start')
+			pushArrowBinding(`binding:${idBase}-end`, arrowShapeId, toShapeId(endId), 'end')
+			return true
+		}
+
+		// Convert edge extensions to tldraw bindings
+		for (const [nodeId, edges] of edgesByNode) {
+			const ownShapeId = toShapeId(nodeId)
+			const ownShape = shapeRecordsById.get(ownShapeId)
+			const isArrowShape = ownShape?.type === 'arrow'
+
+			// Legacy tldraw exports wrote one edge per binding with
+			// `start` pointing at the arrow node itself.
+			const isLegacy = edges.length > 0 && edges.every((e) => e.start === nodeId)
+
+			if (isArrowShape && isLegacy) {
+				edges.forEach((edge, i) => {
+					if (!edge.end) return
+					const target = shapeRecordsById.get(toShapeId(edge.end))
+					if (!target) return
+					// With two legacy edges the terminals are unrecoverable —
+					// assign start/end in order as a best effort.
+					const terminal = edges.length >= 2 && i === 0 ? 'start' : 'end'
+					pushArrowBinding(`binding:edge-${nodeId}-${i}`, ownShapeId, target.id, terminal)
+				})
+				continue
+			}
+
+			if (isArrowShape) {
+				// Spec-compliant edge on a visual arrow node: bind the arrow's
+				// terminals to the referenced nodes. Extra edges (rare) become
+				// synthesized arrows.
+				edges.forEach((edge, i) => {
+					if (i === 0) {
+						if (edge.start && shapeRecordsById.has(toShapeId(edge.start))) {
+							pushArrowBinding(
+								`binding:edge-${nodeId}-start`,
+								ownShapeId,
+								toShapeId(edge.start),
+								'start'
+							)
+						}
+						if (edge.end && shapeRecordsById.has(toShapeId(edge.end))) {
+							pushArrowBinding(`binding:edge-${nodeId}-end`, ownShapeId, toShapeId(edge.end), 'end')
+						}
+					} else if (edge.start && edge.end) {
+						synthesizeArrow(`edge-${nodeId}-${i}`, edge.start, edge.end)
+					}
+				})
+				continue
+			}
+
+			// Pure structural edge node (or a non-arrow visual node carrying an
+			// edge): synthesize an arrow so the connection is visible and bound.
+			edges.forEach((edge, i) => {
+				if (!edge.start || !edge.end) return
+				const idBase = !ownShape && edges.length === 1 ? nodeId : `edge-${nodeId}-${i}`
+				synthesizeArrow(idBase, edge.start, edge.end)
+			})
+		}
+
+		// Process hyperedge nodes: synthesize an arrow per connection
 		for (const hyperedge of hyperedgeNodes) {
-			const heData = hyperedge.data.find((d) => d.type === '@ocif/hyperedge')
+			const heData = (hyperedge.data ?? []).find((d) => d.type === '@ocif/hyperedge')
 			if (heData?.endpoints) {
 				const endpoints = heData.endpoints
 				const inEndpoints = endpoints.filter((ep: any) => ep.direction === 'in')
@@ -441,72 +643,40 @@ export function parseOcifFile({
 					for (let i = 0; i < Math.max(inEndpoints.length, outEndpoints.length); i++) {
 						const inEp = inEndpoints[i % inEndpoints.length]
 						const outEp = outEndpoints[i % outEndpoints.length]
-						const inId = inEp.id.startsWith('shape:') ? inEp.id : `shape:${inEp.id}`
-						const outId = outEp.id.startsWith('shape:') ? outEp.id : `shape:${outEp.id}`
-						records.push({
-							id: `binding:hyperedge-${hyperedge.id}-${i}`,
-							typeName: 'binding' as const,
-							type: 'arrow',
-							fromId: inId,
-							toId: outId,
-							meta: {},
-							props: {
-								terminal: 'end',
-								normalizedAnchor: { x: 0.5, y: 0.5 },
-								isExact: false,
-								isPrecise: false,
-								snap: 'none',
-							},
-						} as any)
+						synthesizeArrow(`hyperedge-${hyperedge.id}-${i}`, inEp.id, outEp.id)
 					}
 				}
 
 				for (let i = 0; i < undirEndpoints.length - 1; i++) {
-					const ep1Id = undirEndpoints[i].id.startsWith('shape:') ? undirEndpoints[i].id : `shape:${undirEndpoints[i].id}`
-					const ep2Id = undirEndpoints[i + 1].id.startsWith('shape:') ? undirEndpoints[i + 1].id : `shape:${undirEndpoints[i + 1].id}`
-					records.push({
-						id: `binding:hyperedge-undir-${hyperedge.id}-${i}`,
-						typeName: 'binding' as const,
-						type: 'arrow',
-						fromId: ep1Id,
-						toId: ep2Id,
-						meta: {},
-						props: {
-							terminal: 'end',
-							normalizedAnchor: { x: 0.5, y: 0.5 },
-							isExact: false,
-							isPrecise: false,
-							snap: 'none',
-						},
-					} as any)
+					synthesizeArrow(
+						`hyperedge-undir-${hyperedge.id}-${i}`,
+						undirEndpoints[i].id,
+						undirEndpoints[i + 1].id
+					)
 				}
 			}
 		}
 
-		// Convert edge extensions to tldraw bindings
-		let edgeIndex = 0
-		for (const edge of edgeRelations) {
-			const bindingId = `binding:edge-${edge.nodeId}-${edgeIndex++}`
-			const fromId = edge.start.startsWith('shape:') ? edge.start : `shape:${edge.start}`
-			const toId = edge.end.startsWith('shape:') ? edge.end : `shape:${edge.end}`
-			records.push({
-				id: bindingId,
-				typeName: 'binding',
-				type: 'arrow',
-				fromId,
-				toId,
-				meta: {},
-				props: {
-					terminal: 'end',
-					normalizedAnchor: { x: 0.5, y: 0.5 },
-					isExact: false,
-					isPrecise: false,
-					snap: 'none',
-				},
-			} as any)
+		// Assign unique ascending fractional indexes per parent so z-order
+		// follows the OCIF node order instead of colliding on 'a1'.
+		const shapesByParent = new Map<string, any[]>()
+		for (const r of records) {
+			if (r.typeName !== 'shape') continue
+			const parentId = (r as any).parentId ?? 'page:page'
+			if (!shapesByParent.has(parentId)) shapesByParent.set(parentId, [])
+			shapesByParent.get(parentId)!.push(r)
+		}
+		for (const siblings of shapesByParent.values()) {
+			const indices = getIndices(siblings.length)
+			siblings.forEach((s, i) => {
+				s.index = indices[i]
+			})
 		}
 
 		// Filter out any records that might be invalid or have broken references
+		const shapeIdSet = new Set(
+			records.filter((r) => r.typeName === 'shape').map((r) => r.id as string)
+		)
 		const validRecords = records.filter((record) => {
 			// Basic validation - ensure required properties exist
 			if (!record.id || !record.typeName) {
@@ -522,9 +692,7 @@ export function parseOcifFile({
 			// For bindings, ensure they reference valid shapes
 			if (record.typeName === 'binding') {
 				const binding = record as any
-				const fromShape = records.find((r) => r.id === binding.fromId && r.typeName === 'shape')
-				const toShape = records.find((r) => r.id === binding.toId && r.typeName === 'shape')
-				return fromShape && toShape
+				return shapeIdSet.has(binding.fromId) && shapeIdSet.has(binding.toId)
 			}
 
 			// For assets, ensure they have valid properties
@@ -566,12 +734,19 @@ export function parseOcifFile({
 // Parse + load helper
 // ---------------------------------------------------------------------------
 
+const DEFAULT_ERROR_STRINGS = {
+	title: 'Could not open file',
+	notAnOcifFile: 'This is not a valid OCIF file.',
+	versionNotSupported: 'This OCIF file uses an unsupported format version.',
+	corrupted: 'This OCIF file could not be read. It may be corrupted.',
+}
+
 /** @public */
 export async function parseAndLoadOcifFile(
 	editor: Editor,
 	document: string,
-	msg: (id: any) => string,
-	addToast: any,
+	msg?: (id: string) => string,
+	addToast?: (toast: { title: string; description?: string; severity?: string }) => void,
 	forceDarkMode?: boolean
 ) {
 	const parseFileResult = parseOcifFile({
@@ -583,21 +758,29 @@ export async function parseAndLoadOcifFile(
 		switch (parseFileResult.error.type) {
 			case 'notAnOcifFile':
 				console.error('[tldraw-ocif] Not a valid OCIF file', parseFileResult.error.cause)
-				description = msg('file-system.file-open-error.not-a-tldraw-file')
+				description = msg
+					? msg('file-system.file-open-error.not-a-tldraw-file')
+					: DEFAULT_ERROR_STRINGS.notAnOcifFile
 				break
 			case 'ocifVersionNotSupported':
-				description = msg('file-system.file-open-error.file-format-version-too-new')
+				description = msg
+					? msg('file-system.file-open-error.file-format-version-too-new')
+					: DEFAULT_ERROR_STRINGS.versionNotSupported
 				break
 			case 'invalidOcifStructure':
 				console.error('[tldraw-ocif] Invalid OCIF structure', parseFileResult.error.cause)
-				description = msg('file-system.file-open-error.generic-corrupted-file')
+				description = msg
+					? msg('file-system.file-open-error.generic-corrupted-file')
+					: DEFAULT_ERROR_STRINGS.corrupted
 				break
 			default:
-				description = msg('file-system.file-open-error.generic-corrupted-file')
+				description = msg
+					? msg('file-system.file-open-error.generic-corrupted-file')
+					: DEFAULT_ERROR_STRINGS.corrupted
 				break
 		}
-		addToast({
-			title: msg('file-system.file-open-error.title'),
+		addToast?.({
+			title: msg ? msg('file-system.file-open-error.title') : DEFAULT_ERROR_STRINGS.title,
 			description,
 			severity: 'error',
 		})
@@ -611,8 +794,6 @@ export async function parseAndLoadOcifFile(
 		editor.loadSnapshot(snapshot)
 		editor.clearHistory()
 
-		extractAndResolveAssets(editor, snapshot)
-
 		const bounds = editor.getCurrentPageBounds()
 		if (bounds) {
 			editor.zoomToBounds(bounds, { targetZoom: 1, immediate: true })
@@ -623,29 +804,25 @@ export async function parseAndLoadOcifFile(
 }
 
 // ---------------------------------------------------------------------------
-// Internal: asset extraction (simplified from tldraw's extractAssets)
-// ---------------------------------------------------------------------------
-
-async function extractAndResolveAssets(editor: Editor, snapshot: any) {
-	const records = snapshot.store ? Object.values(snapshot.store) : Object.values(snapshot)
-
-	for (const record of records as any[]) {
-		if (
-			record.typeName === 'asset' &&
-			record.props.src &&
-			record.props.src.startsWith('data:') &&
-			(record.type === 'image' || record.type === 'video')
-		) {
-			// Data URIs are already embedded – nothing to resolve for portability.
-			// If the host app has an asset upload handler the consumer can call
-			// editor.uploadAsset() themselves after loading.
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Internal helpers – tldraw shape → OCIF node
 // ---------------------------------------------------------------------------
+
+/**
+ * Decode a tldraw 5.x draw segment into absolute points. Falls back to the
+ * legacy `points` array shape for pre-compression data.
+ */
+function segmentToPoints(segment: any): Array<{ x: number; y: number; z?: number }> {
+	if (!segment) return []
+	if (Array.isArray(segment.points)) return segment.points
+	if (typeof segment.path === 'string' && segment.path.length > 0) {
+		try {
+			return b64Vecs.decodePoints(segment.path)
+		} catch {
+			return []
+		}
+	}
+	return []
+}
 
 function calculateDrawShapeSize(segments: any[]): [number, number] {
 	if (!segments || segments.length === 0) {
@@ -658,13 +835,11 @@ function calculateDrawShapeSize(segments: any[]): [number, number] {
 		maxY = -Infinity
 
 	for (const segment of segments) {
-		if (segment.points && segment.points.length > 0) {
-			for (const point of segment.points) {
-				minX = Math.min(minX, point.x)
-				minY = Math.min(minY, point.y)
-				maxX = Math.max(maxX, point.x)
-				maxY = Math.max(maxY, point.y)
-			}
+		for (const point of segmentToPoints(segment)) {
+			minX = Math.min(minX, point.x)
+			minY = Math.min(minY, point.y)
+			maxX = Math.max(maxX, point.x)
+			maxY = Math.max(maxY, point.y)
 		}
 	}
 
@@ -675,14 +850,14 @@ function calculateDrawShapeSize(segments: any[]): [number, number] {
 	return [Math.max(maxX - minX, 10), Math.max(maxY - minY, 10)]
 }
 
-function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | null {
-	const position: [number, number] = [shape.x, shape.y]
-
+function convertTldrawShapeToOcifNode(
+	shape: any,
+	position: [number, number],
+	assetsById: Map<string, any>
+): OcifNode | null {
 	let size: [number, number]
-	if (shape.type === 'draw') {
+	if (shape.type === 'draw' || shape.type === 'highlight') {
 		size = calculateDrawShapeSize(shape.props.segments)
-	} else if (shape.type === 'text') {
-		size = [shape.props.w || 100, shape.props.h || 100]
 	} else {
 		size = [shape.props.w || 100, shape.props.h || 100]
 	}
@@ -716,9 +891,12 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				nodeData.geoType = shape.props.geo
 			}
 
-			if (shape.props.text && shape.props.text.trim()) {
-				nodeData.text =
-					renderPlaintextFromRichText(editor, shape.props.richText) || shape.props.text
+			if (shape.props.flipX) nodeData.flipX = true
+			if (shape.props.flipY) nodeData.flipY = true
+
+			const geoText = renderPlaintextFromRichText(shape.props.richText)
+			if (geoText && geoText.trim()) {
+				nodeData.text = geoText
 				nodeData.textColor = convertTldrawColorToHex(shape.props.labelColor || shape.props.color)
 				nodeData.fontSize = convertTldrawSizeToPixels(shape.props.size) * 4
 				nodeData.fontFamily = convertTldrawFontToCSS(shape.props.font || 'draw')
@@ -734,12 +912,10 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				strokeColor: 'transparent',
 				fillColor: 'transparent',
 				strokeWidth: 0,
-				text: shape.props.richText
-					? renderPlaintextFromRichText(editor, shape.props.richText)
-					: shape.props.text || '',
+				text: renderPlaintextFromRichText(shape.props.richText),
 				textColor: convertTldrawColorToHex(shape.props.color),
 				fontSize: convertTldrawSizeToPixels(shape.props.size) * 4,
-				fontFamily: shape.props.font || 'draw',
+				fontFamily: convertTldrawFontToCSS(shape.props.font || 'draw'),
 				textAlign: convertTldrawTextAlignToOcif(shape.props.textAlign || 'start'),
 			}
 
@@ -751,8 +927,8 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				fontFamily: convertTldrawFontToCSS(shape.props.font || 'draw'),
 				color: convertTldrawColorToHex(shape.props.color),
 				align: convertTldrawTextAlignToOcifStyle(shape.props.textAlign || 'start'),
-				bold: false,
-				italic: false,
+				bold: richTextHasMark(shape.props.richText, 'bold'),
+				italic: richTextHasMark(shape.props.richText, 'italic'),
 			})
 
 			break
@@ -782,7 +958,7 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 				strokeWidth: convertTldrawSizeToPixels(shape.props.size),
 			}
 
-			const arrowText = renderPlaintextFromRichText(editor, shape.props.richText)
+			const arrowText = renderPlaintextFromRichText(shape.props.richText)
 			if (arrowText) {
 				arrowData.text = arrowText
 				arrowData.labelColor = convertTldrawColorToHex(shape.props.labelColor || 'black')
@@ -803,27 +979,13 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 			})
 			break
 		}
-		case 'image': {
-			const node: OcifNode = {
-				id: shape.id,
-				position,
-				size,
-				rotation: shape.rotation || 0,
-				data: [],
-			}
-			if (shape.props.assetId) {
-				node.resource = shape.props.assetId
-				node.resourceFit = 'contain'
-			}
-			if (scale) node.scale = scale
-			return node
-		}
+		case 'image':
 		case 'video': {
 			const node: OcifNode = {
 				id: shape.id,
 				position,
 				size,
-				rotation: shape.rotation || 0,
+				rotation: radiansToDegrees(shape.rotation || 0),
 				data: [],
 			}
 			if (shape.props.assetId) {
@@ -836,12 +998,11 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 		case 'note': {
 			data.push({
 				type: '@tldraw/node/note',
-				text: shape.props.richText
-					? renderPlaintextFromRichText(editor, shape.props.richText)
-					: '',
+				text: renderPlaintextFromRichText(shape.props.richText),
 				color: convertTldrawColorToHex(shape.props.color),
 				labelColor: convertTldrawColorToHex(shape.props.labelColor || shape.props.color),
-				fontSizePx: shape.props.fontSizeAdjustment,
+				fontSizePx:
+					shape.props.fontSizeAdjustment || convertTldrawSizeToPixels(shape.props.size) * 4,
 				fontFamily: convertTldrawFontToCSS(shape.props.font || 'draw'),
 				align: shape.props.align || 'middle',
 				verticalAlign: shape.props.verticalAlign || 'middle',
@@ -866,7 +1027,7 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 			let image = ''
 
 			if (shape.props.assetId) {
-				const asset = editor.getAsset(shape.props.assetId)
+				const asset = assetsById.get(shape.props.assetId)
 				if (asset && asset.type === 'bookmark') {
 					title = asset.props.title || ''
 					description = asset.props.description || ''
@@ -938,13 +1099,12 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 		id: shape.id,
 		position,
 		size,
-		rotation: shape.rotation || 0,
+		rotation: radiansToDegrees(shape.rotation || 0),
 		data,
 	}
 	if (scale) node.scale = scale
 	return node
 }
-
 
 // ---------------------------------------------------------------------------
 // Internal helpers – tldraw asset → OCIF resource
@@ -952,30 +1112,22 @@ function convertTldrawShapeToOcifNode(shape: any, editor: Editor): OcifNode | nu
 
 async function convertTldrawAssetToOcifResource(
 	asset: any,
-	editor: Editor
+	resolveAssetSrc?: (asset: any) => Promise<string | undefined>
 ): Promise<OcifResource | null> {
 	if (asset.type === 'image' || asset.type === 'video') {
 		const representations: OcifRepresentation[] = []
 
-		// Always inline the data as base64 for portability (same as TLDR export)
+		// Inline the data as base64 where possible for portability
 		let assetSrcToSave = asset.props.src
-		if (asset.props.src && !asset.props.src.startsWith('data:')) {
-			try {
-				let src = asset.props.src
-				if (!src.startsWith('http')) {
-					src = (await editor.resolveAssetUrl(asset.id, { shouldResolveToOriginal: true })) || ''
-				}
-				// Convert to base64 data URL for portability (same as TLDR export)
-				assetSrcToSave = await FileHelpers.blobToDataUrl(await (await fetch(src)).blob())
-			} catch {
-				// If conversion fails, keep the original src
-				assetSrcToSave = asset.props.src
-			}
+		if (resolveAssetSrc) {
+			assetSrcToSave = (await resolveAssetSrc(asset)) ?? asset.props.src
 		}
 
 		if (assetSrcToSave) {
+			// The src is a URI (data: or remote) — per the OCIF spec, URIs
+			// belong in `location`; `content` is for raw/base64 payloads.
 			representations.push({
-				content: assetSrcToSave, // Always use content (base64) for portability
+				location: assetSrcToSave,
 				mimeType: asset.props.mimeType,
 			})
 		}
@@ -1024,8 +1176,11 @@ async function convertTldrawAssetToOcifResource(
 function convertOcifResourceToTldrawAsset(
 	resource: OcifResource
 ): { asset: TLRecord; altText: string } | null {
-	// Create a basic asset from the OCIF resource
-	const id = AssetRecordType.createId(resource.id)
+	// Strip any existing 'asset:' prefix so tldraw exports round-trip with
+	// their original record IDs instead of gaining a double prefix.
+	const id = AssetRecordType.createId(
+		resource.id.startsWith('asset:') ? resource.id.slice('asset:'.length) : resource.id
+	)
 
 	// Extract data and mimeType from either new representations format or legacy format
 	let assetData: string | undefined
@@ -1034,17 +1189,19 @@ function convertOcifResourceToTldrawAsset(
 	let bookmarkMetadata: any = null
 
 	if (resource.representations && resource.representations.length > 0) {
-		// Look for the best representation, preferring location over content
-		let selectedRep = resource.representations[0]
+		// Per the OCIF spec, the first representation is the default and later
+		// ones are fallbacks — use the first usable one in order.
+		const selectedRep = resource.representations.find((rep) => rep.content || rep.location)
 
-		// Try to find a location-based representation first
-		const locationRep = resource.representations.find((rep) => rep.location)
-		if (locationRep) {
-			selectedRep = locationRep
+		if (selectedRep) {
+			assetData = selectedRep.location || selectedRep.content
+			mimeType = selectedRep.mimeType
+
+			// A data: URI in `location` implicitly defines its own MIME type
+			if (!mimeType && selectedRep.location?.startsWith('data:')) {
+				mimeType = selectedRep.location.slice('data:'.length).split(/[;,]/)[0] || undefined
+			}
 		}
-
-		assetData = selectedRep.content || selectedRep.location
-		mimeType = selectedRep.mimeType
 
 		// Look for plain text fallback for altText
 		const textFallback = resource.representations.find(
@@ -1134,6 +1291,27 @@ function convertOcifResourceToTldrawAsset(
 // Internal helpers – OCIF node → tldraw shape
 // ---------------------------------------------------------------------------
 
+/** Node data extension types this converter understands. Anything else is
+ * preserved in `shape.meta` and re-emitted unchanged on export, as the OCIF
+ * spec requires. */
+const KNOWN_NODE_DATA_TYPES = new Set([
+	'@ocif/rect',
+	'@ocif/oval',
+	'@ocif/path',
+	'@ocif/arrow',
+	'@ocif/edge',
+	'@ocif/group',
+	'@ocif/hyperedge',
+	'@ocif/inherit',
+	'@ocif/textstyle',
+	'@tldraw/node/note',
+	'@tldraw/node/embed',
+	'@tldraw/node/bookmark',
+	'@tldraw/node/highlight',
+	'@tldraw/node/image',
+	'@tldraw/node/video',
+])
+
 function convertOcifNodeToTldrawShape(
 	node: OcifNode,
 	assetMap: Map<string, string>,
@@ -1142,8 +1320,10 @@ function convertOcifNodeToTldrawShape(
 ): TLRecord | null {
 	const [x, y] = node.position ?? [0, 0]
 	const [w, h] = node.size || [100, 100]
+	const nodeData = node.data ?? []
 
-	const textStyleExtension = node.data.find((d) => d.type === '@ocif/textstyle')
+	const textStyleExtension = nodeData.find((d) => d.type === '@ocif/textstyle')
+	const unknownData = nodeData.filter((d) => !KNOWN_NODE_DATA_TYPES.has(d.type))
 
 	const shapeId = node.id.startsWith('shape:') ? node.id : `shape:${node.id}`
 
@@ -1152,12 +1332,12 @@ function convertOcifNodeToTldrawShape(
 		typeName: 'shape' as const,
 		x,
 		y,
-		rotation: node.rotation || 0,
+		rotation: degreesToRadians(node.rotation || 0),
 		index: 'a1',
 		parentId: 'page:page',
 		isLocked: false,
 		opacity: 1,
-		meta: {},
+		meta: unknownData.length > 0 ? ({ ocifExtensions: unknownData } as any) : {},
 	}
 
 	let scale = 1
@@ -1166,7 +1346,7 @@ function convertOcifNodeToTldrawShape(
 	}
 
 	// Handle nodes with empty data arrays (pure resource nodes)
-	if (node.data.length === 0 && node.resource) {
+	if (nodeData.length === 0 && node.resource) {
 		// This is a pure resource node (image/video)
 		const assetId = assetMap.get(node.resource)
 		const altText = altTextMap.get(node.resource) || ''
@@ -1210,12 +1390,29 @@ function convertOcifNodeToTldrawShape(
 	}
 
 	// Find the primary data type
-	const primaryData = node.data[0]
+	const primaryData = nodeData[0]
 	if (!primaryData) return null
 
 	switch (primaryData.type) {
 		case '@ocif/rect':
-			if (primaryData.text && primaryData.strokeColor === 'transparent' && primaryData.strokeWidth === 0) {
+			if (primaryData.isFrame) {
+				// Frame node — becomes a tldraw frame shape directly, so empty
+				// frames survive the round trip too.
+				return {
+					...baseShape,
+					type: 'frame',
+					props: {
+						w,
+						h,
+						name: primaryData.frameName || '',
+						color: convertHexToTldrawColor(primaryData.strokeColor || '#000000'),
+					},
+				} as any
+			} else if (
+				primaryData.text &&
+				primaryData.strokeColor === 'transparent' &&
+				primaryData.strokeWidth === 0
+			) {
 				// This is a pure text node (transparent stroke, zero width)
 				const fontSize = textStyleExtension?.fontSizePx || primaryData.fontSize || 12
 				const fontFamily = textStyleExtension?.fontFamily || primaryData.fontFamily || 'draw'
@@ -1259,9 +1456,6 @@ function convertOcifNodeToTldrawShape(
 						},
 					} as any
 				}
-			} else if (primaryData.isFrame) {
-				// This is a frame node - will be handled separately
-				return null
 			} else {
 				// Regular rectangle (or other geo shapes like diamond, star, etc.)
 				const props: any = {
@@ -1281,8 +1475,8 @@ function convertOcifNodeToTldrawShape(
 						? convertHexToTldrawColor(primaryData.textColor)
 						: 'black',
 					richText: primaryData.text ? toRichText(primaryData.text) : toRichText(''),
-					flipX: false,
-					flipY: false,
+					flipX: primaryData.flipX === true,
+					flipY: primaryData.flipY === true,
 				}
 
 				// Always add scale property (tldraw schema requires it)
@@ -1313,8 +1507,8 @@ function convertOcifNodeToTldrawShape(
 				dash: 'draw',
 				labelColor: 'black',
 				richText: toRichText(''),
-				flipX: false,
-				flipY: false,
+				flipX: primaryData.flipX === true,
+				flipY: primaryData.flipY === true,
 			}
 
 			// Always add scale property (tldraw schema requires it)
@@ -1414,7 +1608,8 @@ function convertOcifNodeToTldrawShape(
 				verticalAlign: primaryData.verticalAlign || 'middle',
 				growY: primaryData.growY || 0,
 				url: primaryData.url || '',
-				fontSizeAdjustment: primaryData.fontSizePx !== undefined ? primaryData.fontSizePx : 0,
+				// Let tldraw recompute the auto-fit font size from `size`.
+				fontSizeAdjustment: 0,
 				scale: scale,
 				textLastEditedBy: null,
 			}
@@ -1502,9 +1697,11 @@ function convertOcifNodeToTldrawShape(
 		}
 
 		default:
-			// For unknown types, create a basic geo shape
+			// For unknown types, create a placeholder geo shape. The original
+			// data is preserved in meta and restored verbatim on export.
 			return {
 				...baseShape,
+				meta: { ...baseShape.meta, ocifUnknownPrimary: true },
 				type: 'geo',
 				props: {
 					geo: 'rectangle',
@@ -1531,28 +1728,66 @@ function convertOcifNodeToTldrawShape(
 	return null
 }
 
-
 // ---------------------------------------------------------------------------
 // Color conversion helpers
 // ---------------------------------------------------------------------------
 
+const TLDRAW_COLOR_HEX: Array<[string, string]> = [
+	['black', '#000000'],
+	['grey', '#808080'],
+	['white', '#FFFFFF'],
+	['blue', '#0066CC'],
+	['green', '#00AA00'],
+	['yellow', '#FFDD00'],
+	['orange', '#FF8800'],
+	['red', '#FF0000'],
+	['violet', '#8800FF'],
+	['light-blue', '#66CCFF'],
+	['light-green', '#88FF88'],
+	['light-red', '#FF8888'],
+	['light-violet', '#CC88FF'],
+]
+
 function convertTldrawColorToHex(color: string): string {
-	const colorMap: { [key: string]: string } = {
-		black: '#000000',
-		grey: '#808080',
-		white: '#FFFFFF',
-		blue: '#0066CC',
-		green: '#00AA00',
-		yellow: '#FFDD00',
-		orange: '#FF8800',
-		red: '#FF0000',
-		violet: '#8800FF',
-		'light-blue': '#66CCFF',
-		'light-green': '#88FF88',
-		'light-red': '#FF8888',
-		'light-violet': '#CC88FF',
+	return TLDRAW_COLOR_HEX.find(([name]) => name === color)?.[1] || '#000000'
+}
+
+/** Parse #RGB, #RRGGBB, or #RRGGBBAA hex (case-insensitive). */
+function parseHexColor(hex: string): { r: number; g: number; b: number; a: number } | null {
+	if (typeof hex !== 'string') return null
+	const match = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(hex.trim())
+	if (!match) return null
+	let digits = match[1]
+	if (digits.length === 3) {
+		digits = digits
+			.split('')
+			.map((c) => c + c)
+			.join('')
 	}
-	return colorMap[color] || '#000000'
+	const r = parseInt(digits.slice(0, 2), 16)
+	const g = parseInt(digits.slice(2, 4), 16)
+	const b = parseInt(digits.slice(4, 6), 16)
+	const a = digits.length === 8 ? parseInt(digits.slice(6, 8), 16) / 255 : 1
+	return { r, g, b, a }
+}
+
+function convertHexToTldrawColor(hex: string): string {
+	const rgb = parseHexColor(hex)
+	if (!rgb) return 'black'
+
+	// Nearest palette color by squared RGB distance, so lowercase hex and
+	// colors from other OCIF apps still map to something sensible.
+	let bestName = 'black'
+	let bestDistance = Infinity
+	for (const [name, paletteHex] of TLDRAW_COLOR_HEX) {
+		const p = parseHexColor(paletteHex)!
+		const distance = (p.r - rgb.r) ** 2 + (p.g - rgb.g) ** 2 + (p.b - rgb.b) ** 2
+		if (distance < bestDistance) {
+			bestDistance = distance
+			bestName = name
+		}
+	}
+	return bestName
 }
 
 function convertTldrawFillToHex(fill: string, color: string): string {
@@ -1561,6 +1796,14 @@ function convertTldrawFillToHex(fill: string, color: string): string {
 	// For semi-fills, use a transparent version
 	const baseColor = convertTldrawColorToHex(color)
 	return baseColor + '80' // Add transparency
+}
+
+function convertHexToTldrawFill(hex: string): string {
+	if (!hex || hex === 'transparent' || hex === 'none') return 'none'
+	const rgb = parseHexColor(hex)
+	if (rgb && rgb.a === 0) return 'none'
+	if (rgb && rgb.a < 1) return 'semi'
+	return 'solid'
 }
 
 function convertTldrawSizeToPixels(size: string): number {
@@ -1622,32 +1865,6 @@ function convertTldrawTextAlignToOcifStyle(align: string): string {
 	return alignMap[align] || 'left'
 }
 
-function convertHexToTldrawColor(hex: string): string {
-	const colorMap: { [key: string]: string } = {
-		'#000000': 'black',
-		'#808080': 'grey',
-		'#FFFFFF': 'white',
-		'#0066CC': 'blue',
-		'#00AA00': 'green',
-		'#00FF00': 'green',
-		'#FFDD00': 'yellow',
-		'#FF8800': 'orange',
-		'#FF0000': 'red',
-		'#8800FF': 'violet',
-		'#66CCFF': 'light-blue',
-		'#88FF88': 'light-green',
-		'#FF8888': 'light-red',
-		'#CC88FF': 'light-violet',
-	}
-	return colorMap[hex] || 'black'
-}
-
-function convertHexToTldrawFill(hex: string): string {
-	if (hex === 'transparent' || !hex) return 'none'
-	if (hex.endsWith('80') || hex.includes('alpha')) return 'semi'
-	return 'solid'
-}
-
 function convertPixelsToTldrawSize(pixels: number): string {
 	if (pixels <= 2) return 's'
 	if (pixels <= 4) return 'm'
@@ -1700,35 +1917,135 @@ function convertDrawSegmentsToSvgPath(segments: any[]): string {
 
 	let path = ''
 	for (const segment of segments) {
-		if (!segment.points || segment.points.length === 0) continue
+		const points = segmentToPoints(segment)
+		if (points.length === 0) continue
 
-		const firstPoint = segment.points[0]
-		path += `M${firstPoint.x},${firstPoint.y}`
+		const firstPoint = points[0]
+		path += `M${round2(firstPoint.x)},${round2(firstPoint.y)}`
 
-		for (let i = 1; i < segment.points.length; i++) {
-			const point = segment.points[i]
-			if (segment.type === 'straight') {
-				path += `L${point.x},${point.y}`
-			} else {
-				// For free-form segments, use line-to for simplicity
-				path += `L${point.x},${point.y}`
-			}
+		for (let i = 1; i < points.length; i++) {
+			const point = points[i]
+			path += `L${round2(point.x)},${round2(point.y)}`
 		}
 	}
 
 	return path
 }
 
-function convertSvgPathToDrawSegments(svgPath: string): any[] {
-	// In tldraw 4.x, segments use a `path` string instead of `points` array.
-	const fallbackPath = 'M0,0 L50,25 L100,0'
+function round2(n: number): number {
+	return Math.round(n * 100) / 100
+}
 
-	if (!svgPath || svgPath.length === 0) {
-		return [{ type: 'free', path: fallbackPath }]
+/**
+ * Parse an SVG path string into subpaths of absolute points. Supports the
+ * common command set; curve commands contribute their endpoints.
+ */
+function parseSvgPathToSubpaths(svgPath: string): Array<Array<{ x: number; y: number }>> {
+	const subpaths: Array<Array<{ x: number; y: number }>> = []
+	let current: Array<{ x: number; y: number }> = []
+	let cx = 0
+	let cy = 0
+
+	const commandRe = /([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)/g
+	let match: RegExpExecArray | null
+	while ((match = commandRe.exec(svgPath)) !== null) {
+		const command = match[1]
+		const args = (match[2].trim().match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi) ?? []).map(Number)
+		const isRelative = command === command.toLowerCase()
+
+		const push = () => current.push({ x: cx, y: cy })
+
+		switch (command.toUpperCase()) {
+			case 'M': {
+				if (current.length > 0) subpaths.push(current)
+				current = []
+				for (let i = 0; i + 1 < args.length; i += 2) {
+					cx = isRelative ? cx + args[i] : args[i]
+					cy = isRelative ? cy + args[i + 1] : args[i + 1]
+					push()
+				}
+				break
+			}
+			case 'L':
+			case 'T': {
+				for (let i = 0; i + 1 < args.length; i += 2) {
+					cx = isRelative ? cx + args[i] : args[i]
+					cy = isRelative ? cy + args[i + 1] : args[i + 1]
+					push()
+				}
+				break
+			}
+			case 'H': {
+				for (const arg of args) {
+					cx = isRelative ? cx + arg : arg
+					push()
+				}
+				break
+			}
+			case 'V': {
+				for (const arg of args) {
+					cy = isRelative ? cy + arg : arg
+					push()
+				}
+				break
+			}
+			case 'C': {
+				for (let i = 0; i + 5 < args.length; i += 6) {
+					cx = isRelative ? cx + args[i + 4] : args[i + 4]
+					cy = isRelative ? cy + args[i + 5] : args[i + 5]
+					push()
+				}
+				break
+			}
+			case 'S':
+			case 'Q': {
+				for (let i = 0; i + 3 < args.length; i += 4) {
+					cx = isRelative ? cx + args[i + 2] : args[i + 2]
+					cy = isRelative ? cy + args[i + 3] : args[i + 3]
+					push()
+				}
+				break
+			}
+			case 'A': {
+				for (let i = 0; i + 6 < args.length; i += 7) {
+					cx = isRelative ? cx + args[i + 5] : args[i + 5]
+					cy = isRelative ? cy + args[i + 6] : args[i + 6]
+					push()
+				}
+				break
+			}
+			case 'Z':
+				break
+		}
+	}
+	if (current.length > 0) subpaths.push(current)
+
+	return subpaths
+}
+
+function convertSvgPathToDrawSegments(svgPath: string): any[] {
+	// tldraw 5.x stores segment points as delta-encoded base64 (see b64Vecs).
+	const subpaths = parseSvgPathToSubpaths(svgPath || '')
+		// A draw segment needs at least two points to render a stroke.
+		.map((points) => (points.length === 1 ? [points[0], points[0]] : points))
+		.filter((points) => points.length >= 2)
+
+	if (subpaths.length === 0) {
+		return [
+			{
+				type: 'free',
+				path: b64Vecs.encodePoints([
+					{ x: 0, y: 0, z: 0.5 },
+					{ x: 1, y: 1, z: 0.5 },
+				]),
+			},
+		]
 	}
 
-	// The SVG path is already in the right format — wrap it in a segment.
-	return [{ type: 'free', path: svgPath }]
+	return subpaths.map((points) => ({
+		type: 'free',
+		path: b64Vecs.encodePoints(points.map((p) => ({ x: p.x, y: p.y, z: 0.5 }))),
+	}))
 }
 
 // ---------------------------------------------------------------------------

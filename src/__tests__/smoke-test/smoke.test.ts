@@ -284,10 +284,10 @@ describe('Smoke test — QA pruned fixture', () => {
 
 			expect(ocifAssets).toHaveLength(tldrAssets.length)
 
-			// Note: asset IDs don't match exactly because OCIF resource IDs
-			// already contain the "asset:" prefix from the tldraw export, and
-			// the OCIF parser adds another "asset:" prefix when creating records.
-			// e.g. resource id "asset:-123" → record id "asset:asset:-123"
+			// Asset record IDs round-trip exactly (no double "asset:" prefix)
+			const tldrIds = tldrAssets.map((a) => a.id).sort()
+			const ocifIds = ocifAssets.map((a) => a.id).sort()
+			expect(ocifIds).toEqual(tldrIds)
 		})
 
 		it('should produce matching shape types from OCIF and .tldr', () => {

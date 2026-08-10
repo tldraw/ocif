@@ -58,7 +58,8 @@ describe('OCIF', () => {
 							size: [100, 80],
 							resource: 'resource1',
 							resourceFit: 'contain',
-							rotation: Math.PI / 6,
+							// OCIF rotation is degrees; 30° = π/6 radians in tldraw
+							rotation: 30,
 							data: [{ type: '@ocif/rect', strokeColor: '#FF0000' }],
 						},
 					],
@@ -147,12 +148,17 @@ describe('OCIF', () => {
 					const shapes = records.filter((r) => r.typeName === 'shape')
 					expect(shapes).toHaveLength(3)
 
-					const bindings = records.filter((r) => r.typeName === 'binding')
-					expect(bindings).toHaveLength(1)
+					// The arrow shape is bound at both terminals to the edge's nodes
+					const bindings = records.filter((r) => r.typeName === 'binding') as any[]
+					expect(bindings).toHaveLength(2)
 
-					const binding = bindings[0] as any
-					expect(binding.fromId).toBe('shape:node1')
-					expect(binding.toId).toBe('shape:node2')
+					for (const binding of bindings) {
+						expect(binding.fromId).toBe('shape:arrow1')
+					}
+					const startBinding = bindings.find((b) => b.props.terminal === 'start')
+					const endBinding = bindings.find((b) => b.props.terminal === 'end')
+					expect(startBinding?.toId).toBe('shape:node1')
+					expect(endBinding?.toId).toBe('shape:node2')
 				}
 			})
 		})
@@ -574,14 +580,17 @@ describe('OCIF', () => {
 				expect(parseResult.ok).toBe(true)
 				if (parseResult.ok) {
 					const records = Array.from(parseResult.value.allRecords())
-					const shapes = records.filter((r) => r.typeName === 'shape')
+					const shapes = records.filter((r) => r.typeName === 'shape') as any[]
 					const bindings = records.filter((r) => r.typeName === 'binding')
 
-					expect(shapes).toHaveLength(3)
-					expect(bindings.length).toBeGreaterThan(0)
+					// 3 rects + one synthesized arrow per in→out connection
+					const arrows = shapes.filter((s) => s.type === 'arrow')
+					expect(shapes).toHaveLength(5)
+					expect(arrows).toHaveLength(2)
 
+					// Each synthesized arrow is bound at both terminals
 					const hyperedgeBindings = bindings.filter((b: any) => b.id.includes('hyperedge'))
-					expect(hyperedgeBindings.length).toBeGreaterThan(0)
+					expect(hyperedgeBindings).toHaveLength(4)
 				}
 			})
 
@@ -1543,15 +1552,24 @@ describe('OCIF', () => {
 			expect(parseResult.ok).toBe(true)
 			if (parseResult.ok) {
 				const records = Array.from(parseResult.value.allRecords())
+				const shapes = records.filter((r) => r.typeName === 'shape') as any[]
 				const bindings = records.filter((r) => r.typeName === 'binding') as any[]
 
-				expect(bindings).toHaveLength(2)
+				// First edge binds the visual arrow (start→A, end→B); the second
+				// edge gets a synthesized arrow (start→A, end→C).
+				expect(bindings).toHaveLength(4)
+				expect(shapes.filter((s) => s.type === 'arrow')).toHaveLength(2)
 
-				const toIds = bindings.map((b: any) => b.toId).sort()
-				expect(toIds).toEqual(['shape:B', 'shape:C'])
+				const arrowBindings = bindings.filter((b) => b.fromId === 'shape:arrow1')
+				expect(arrowBindings.find((b) => b.props.terminal === 'start')?.toId).toBe('shape:A')
+				expect(arrowBindings.find((b) => b.props.terminal === 'end')?.toId).toBe('shape:B')
+
+				const synthBindings = bindings.filter((b) => b.fromId !== 'shape:arrow1')
+				expect(synthBindings.find((b) => b.props.terminal === 'start')?.toId).toBe('shape:A')
+				expect(synthBindings.find((b) => b.props.terminal === 'end')?.toId).toBe('shape:C')
 
 				// Each binding should have a unique ID
-				expect(new Set(bindings.map((b: any) => b.id)).size).toBe(2)
+				expect(new Set(bindings.map((b: any) => b.id)).size).toBe(4)
 			}
 		})
 	})
@@ -1661,13 +1679,19 @@ describe('OCIF', () => {
 				const records = Array.from(parseResult.value.allRecords())
 				const shapes = records.filter((r) => r.typeName === 'shape') as any[]
 
-				// rect1, rect2, and the group shape — but NOT pure-edge as a geo fallback
-				const shapeIds = shapes.map((s: any) => s.id).sort()
-				expect(shapeIds).not.toContain('shape:pure-edge')
-
 				// The two rects should exist
+				const shapeIds = shapes.map((s: any) => s.id).sort()
 				expect(shapeIds).toContain('shape:rect1')
 				expect(shapeIds).toContain('shape:rect2')
+
+				// The pure edge node becomes a bound arrow, not a geo fallback
+				const pureEdge = shapes.find((s: any) => s.id === 'shape:pure-edge')
+				expect(pureEdge).toBeDefined()
+				expect(pureEdge.type).toBe('arrow')
+
+				const bindings = records.filter((r) => r.typeName === 'binding') as any[]
+				const edgeBindings = bindings.filter((b) => b.fromId === 'shape:pure-edge')
+				expect(edgeBindings).toHaveLength(2)
 			}
 		})
 

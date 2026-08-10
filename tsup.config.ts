@@ -6,6 +6,6 @@ export default defineConfig({
 	dts: true,
 	sourcemap: true,
 	clean: true,
-	external: ['tldraw'],
+	external: ['tldraw', '@tldraw/tlschema', '@tldraw/utils'],
 	treeshake: true,
 })
