@@ -529,7 +529,152 @@ describe('Export (tldraw → OCIF)', () => {
 		})
 	})
 
+	describe('Rotation units', () => {
+		it('should convert OCIF degrees to tldraw radians and back', async () => {
+			const source = {
+				ocif: 'https://canvasprotocol.org/ocif/v0.7.0',
+				nodes: [
+					{
+						id: 'rotated',
+						position: [0, 0],
+						size: [100, 100],
+						rotation: 90,
+						data: [{ type: '@ocif/rect', strokeColor: '#000000', fillColor: 'transparent' }],
+					},
+				],
+			}
+
+			const records = importRecords(source)
+			const shape = records.find((r: any) => r.typeName === 'shape') as any
+			expect(shape.rotation).toBeCloseTo(Math.PI / 2)
+
+			const out: OcifFile = JSON.parse(await serializeTldrawRecordsToOcif(records))
+			expect(out.nodes![0].rotation).toBeCloseTo(90)
+		})
+	})
+
+	describe('Unknown extension preservation', () => {
+		it('should round-trip nodes with unknown primary extensions unchanged', async () => {
+			const weird = { type: '@someapp/widget', foo: 'bar', nested: { a: [1, 2, 3] } }
+			const out = await roundTrip({
+				ocif: 'https://canvasprotocol.org/ocif/v0.7.0',
+				nodes: [
+					{
+						id: 'mystery',
+						position: [50, 60],
+						size: [100, 100],
+						data: [weird],
+					},
+				],
+			})
+
+			const node = out.nodes!.find((n) => n.id === 'shape:mystery')!
+			// The placeholder rect is not exported — the original data is
+			expect(node.data).toEqual([weird])
+			expect(node.position).toEqual([50, 60])
+		})
+
+		it('should keep unknown secondary extensions alongside known ones', async () => {
+			const extra = { type: '@someapp/annotation', note: 'keep me' }
+			const out = await roundTrip({
+				ocif: 'https://canvasprotocol.org/ocif/v0.7.0',
+				nodes: [
+					{
+						id: 'rect1',
+						position: [0, 0],
+						size: [100, 100],
+						data: [
+							{ type: '@ocif/rect', strokeColor: '#FF0000', fillColor: 'transparent' },
+							extra,
+						],
+					},
+				],
+			})
+
+			const node = out.nodes!.find((n) => n.id === 'shape:rect1')!
+			expect(node.data!.find((d) => d.type === '@ocif/rect')).toBeDefined()
+			expect(node.data!.find((d) => d.type === '@someapp/annotation')).toEqual(extra)
+		})
+	})
+
+	describe('Resource representations', () => {
+		it('should prefer the first usable representation, not location-bearing ones', () => {
+			const records = importRecords({
+				ocif: 'https://canvasprotocol.org/ocif/v0.7.0',
+				nodes: [
+					{ id: 'img1', position: [0, 0], size: [100, 100], resource: 'r1', data: [] },
+				],
+				resources: [
+					{
+						id: 'r1',
+						representations: [
+							{ content: 'data:image/png;base64,FIRST', mimeType: 'image/png' },
+							{ location: 'https://example.com/fallback.png', mimeType: 'image/png' },
+						],
+					},
+				],
+			})
+
+			const asset = records.find((r: any) => r.typeName === 'asset') as any
+			expect(asset.props.src).toBe('data:image/png;base64,FIRST')
+		})
+
+		it('should export asset URIs in location, not content', async () => {
+			const out = await roundTrip({
+				ocif: 'https://canvasprotocol.org/ocif/v0.7.0',
+				nodes: [
+					{ id: 'img1', position: [0, 0], size: [100, 100], resource: 'r1', data: [] },
+				],
+				resources: [
+					{
+						id: 'r1',
+						representations: [
+							{ location: 'data:image/png;base64,AAAA', mimeType: 'image/png' },
+						],
+					},
+				],
+			})
+
+			const rep = out.resources![0].representations![0]
+			expect(rep.location).toBe('data:image/png;base64,AAAA')
+			expect(rep.content).toBeUndefined()
+		})
+	})
+
 	describe('Robustness', () => {
+		it('should keep the first record when node IDs are duplicated', () => {
+			const records = importRecords({
+				ocif: 'https://canvasprotocol.org/ocif/v0.7.0',
+				nodes: [
+					{
+						id: 'dup',
+						position: [0, 0],
+						size: [100, 100],
+						data: [{ type: '@ocif/rect', strokeColor: '#FF0000', fillColor: 'transparent' }],
+					},
+					{
+						id: 'dup',
+						position: [500, 500],
+						size: [10, 10],
+						data: [{ type: '@ocif/rect', strokeColor: '#0066CC', fillColor: 'transparent' }],
+					},
+				],
+			})
+
+			const shapes = records.filter((r: any) => r.typeName === 'shape') as any[]
+			expect(shapes).toHaveLength(1)
+			expect(shapes[0].x).toBe(0)
+			expect(shapes[0].props.color).toBe('red')
+		})
+
+		it('should reject version strings with trailing garbage', () => {
+			const result = parseOcifFile({
+				json: JSON.stringify({ ocif: 'prefix-v0.7-garbage', nodes: [] }),
+				schema,
+			})
+			expect(result.ok).toBe(false)
+		})
+
 		it('should accept nodes without a data array', () => {
 			const records = importRecords({
 				ocif: 'https://canvasprotocol.org/ocif/v0.7.0',

@@ -64,6 +64,18 @@ function richTextHasMark(richText: any, markType: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Angle helpers — OCIF stores rotation in degrees, tldraw in radians
+// ---------------------------------------------------------------------------
+
+function radiansToDegrees(radians: number): number {
+	return (radians * 180) / Math.PI
+}
+
+function degreesToRadians(degrees: number): number {
+	return (degrees * Math.PI) / 180
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -261,6 +273,19 @@ export async function serializeTldrawRecordsToOcif(
 		if (!node) continue
 		node.data = node.data ?? []
 
+		// Re-emit extensions we don't understand, unchanged (OCIF requires
+		// unknown extensions to survive the round trip).
+		const preserved = Array.isArray(shape.meta?.ocifExtensions) ? shape.meta.ocifExtensions : null
+		if (preserved) {
+			if (shape.meta?.ocifUnknownPrimary) {
+				// This shape was only ever a placeholder — restore the
+				// original data instead of exporting the placeholder rect.
+				node.data = [...preserved]
+			} else {
+				node.data.push(...preserved)
+			}
+		}
+
 		// One edge extension per arrow, with start/end pointing at the nodes
 		// bound at the arrow's start/end terminals.
 		const terminals = arrowTerminals.get(shape.id)
@@ -337,8 +362,8 @@ export function parseOcifFile({
 		return Result.err({ type: 'notAnOcifFile', cause: e })
 	}
 
-	// Accept v0.7 and v0.7.x only (a negative lookahead keeps v0.71 etc. out).
-	if (!/v0\.7(?!\d)/.test(data.ocif)) {
+	// Accept v0.7 and v0.7.x only, anchored to the end of the version URI.
+	if (!/(^|\/)v0\.7(\.\d+)?$/.test(data.ocif)) {
 		return Result.err({ type: 'ocifVersionNotSupported', version: data.ocif })
 	}
 
@@ -355,6 +380,8 @@ export function parseOcifFile({
 		const resourceTypeMap = new Map<string, string>()
 		if (data.resources) {
 			for (const resource of data.resources) {
+				// First occurrence wins on duplicate resource IDs
+				if (assetMap.has(resource.id)) continue
 				const assetResult = convertOcifResourceToTldrawAsset(resource)
 				if (assetResult) {
 					records.push(assetResult.asset)
@@ -386,6 +413,7 @@ export function parseOcifFile({
 		}
 
 		// Convert OCIF nodes to TLDraw shapes
+		const shapeRecordsById = new Map<string, any>()
 		const structuralOnlyTypes = new Set([
 			'@ocif/group',
 			'@ocif/hyperedge',
@@ -401,14 +429,12 @@ export function parseOcifFile({
 			if (isStructuralOnly) continue
 
 			const shapeRecord = convertOcifNodeToTldrawShape(node, assetMap, altTextMap, resourceTypeMap)
-			if (shapeRecord) {
+			// First occurrence wins on duplicate node IDs instead of silently
+			// overwriting earlier records in the store snapshot.
+			if (shapeRecord && !shapeRecordsById.has(shapeRecord.id)) {
 				records.push(shapeRecord)
+				shapeRecordsById.set(shapeRecord.id, shapeRecord)
 			}
-		}
-
-		const shapeRecordsById = new Map<string, any>()
-		for (const r of records) {
-			if (r.typeName === 'shape') shapeRecordsById.set(r.id, r)
 		}
 		const toShapeId = (id: string) => (id.startsWith('shape:') ? id : `shape:${id}`)
 
@@ -959,7 +985,7 @@ function convertTldrawShapeToOcifNode(
 				id: shape.id,
 				position,
 				size,
-				rotation: shape.rotation || 0,
+				rotation: radiansToDegrees(shape.rotation || 0),
 				data: [],
 			}
 			if (shape.props.assetId) {
@@ -1073,7 +1099,7 @@ function convertTldrawShapeToOcifNode(
 		id: shape.id,
 		position,
 		size,
-		rotation: shape.rotation || 0,
+		rotation: radiansToDegrees(shape.rotation || 0),
 		data,
 	}
 	if (scale) node.scale = scale
@@ -1098,8 +1124,10 @@ async function convertTldrawAssetToOcifResource(
 		}
 
 		if (assetSrcToSave) {
+			// The src is a URI (data: or remote) — per the OCIF spec, URIs
+			// belong in `location`; `content` is for raw/base64 payloads.
 			representations.push({
-				content: assetSrcToSave,
+				location: assetSrcToSave,
 				mimeType: asset.props.mimeType,
 			})
 		}
@@ -1161,17 +1189,19 @@ function convertOcifResourceToTldrawAsset(
 	let bookmarkMetadata: any = null
 
 	if (resource.representations && resource.representations.length > 0) {
-		// Look for the best representation, preferring location over content
-		let selectedRep = resource.representations[0]
+		// Per the OCIF spec, the first representation is the default and later
+		// ones are fallbacks — use the first usable one in order.
+		const selectedRep = resource.representations.find((rep) => rep.content || rep.location)
 
-		// Try to find a location-based representation first
-		const locationRep = resource.representations.find((rep) => rep.location)
-		if (locationRep) {
-			selectedRep = locationRep
+		if (selectedRep) {
+			assetData = selectedRep.location || selectedRep.content
+			mimeType = selectedRep.mimeType
+
+			// A data: URI in `location` implicitly defines its own MIME type
+			if (!mimeType && selectedRep.location?.startsWith('data:')) {
+				mimeType = selectedRep.location.slice('data:'.length).split(/[;,]/)[0] || undefined
+			}
 		}
-
-		assetData = selectedRep.content || selectedRep.location
-		mimeType = selectedRep.mimeType
 
 		// Look for plain text fallback for altText
 		const textFallback = resource.representations.find(
@@ -1261,6 +1291,27 @@ function convertOcifResourceToTldrawAsset(
 // Internal helpers – OCIF node → tldraw shape
 // ---------------------------------------------------------------------------
 
+/** Node data extension types this converter understands. Anything else is
+ * preserved in `shape.meta` and re-emitted unchanged on export, as the OCIF
+ * spec requires. */
+const KNOWN_NODE_DATA_TYPES = new Set([
+	'@ocif/rect',
+	'@ocif/oval',
+	'@ocif/path',
+	'@ocif/arrow',
+	'@ocif/edge',
+	'@ocif/group',
+	'@ocif/hyperedge',
+	'@ocif/inherit',
+	'@ocif/textstyle',
+	'@tldraw/node/note',
+	'@tldraw/node/embed',
+	'@tldraw/node/bookmark',
+	'@tldraw/node/highlight',
+	'@tldraw/node/image',
+	'@tldraw/node/video',
+])
+
 function convertOcifNodeToTldrawShape(
 	node: OcifNode,
 	assetMap: Map<string, string>,
@@ -1272,6 +1323,7 @@ function convertOcifNodeToTldrawShape(
 	const nodeData = node.data ?? []
 
 	const textStyleExtension = nodeData.find((d) => d.type === '@ocif/textstyle')
+	const unknownData = nodeData.filter((d) => !KNOWN_NODE_DATA_TYPES.has(d.type))
 
 	const shapeId = node.id.startsWith('shape:') ? node.id : `shape:${node.id}`
 
@@ -1280,12 +1332,12 @@ function convertOcifNodeToTldrawShape(
 		typeName: 'shape' as const,
 		x,
 		y,
-		rotation: node.rotation || 0,
+		rotation: degreesToRadians(node.rotation || 0),
 		index: 'a1',
 		parentId: 'page:page',
 		isLocked: false,
 		opacity: 1,
-		meta: {},
+		meta: unknownData.length > 0 ? ({ ocifExtensions: unknownData } as any) : {},
 	}
 
 	let scale = 1
@@ -1645,9 +1697,11 @@ function convertOcifNodeToTldrawShape(
 		}
 
 		default:
-			// For unknown types, create a basic geo shape
+			// For unknown types, create a placeholder geo shape. The original
+			// data is preserved in meta and restored verbatim on export.
 			return {
 				...baseShape,
+				meta: { ...baseShape.meta, ocifUnknownPrimary: true },
 				type: 'geo',
 				props: {
 					geo: 'rectangle',

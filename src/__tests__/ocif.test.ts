@@ -58,7 +58,8 @@ describe('OCIF', () => {
 							size: [100, 80],
 							resource: 'resource1',
 							resourceFit: 'contain',
-							rotation: Math.PI / 6,
+							// OCIF rotation is degrees; 30° = π/6 radians in tldraw
+							rotation: 30,
 							data: [{ type: '@ocif/rect', strokeColor: '#FF0000' }],
 						},
 					],

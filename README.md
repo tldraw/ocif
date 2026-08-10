@@ -104,12 +104,21 @@ OcifFileParseError
 
 ### Layout
 
-- `@ocif/ports` — precise anchor points for arrow bindings
-- Node `scale` property — scale factor (v0.7.0 core property)
+- Node `scale` property — uniform scale factor (v0.7.0 core property; array scales use the first component)
+- Node `rotation` property — degrees per the spec, converted to/from tldraw's radians
 
 ### Resources
 
-- Image, video, and bookmark assets with representations
+- Image, video, and bookmark assets with representations (first representation is the default, later ones are fallbacks, per the spec)
+
+### Interoperability
+
+- Unknown node extensions are preserved on import (in `shape.meta`) and re-exported unchanged, as required by the OCIF spec
+
+### Not yet implemented
+
+- `@ocif/ports` anchor points (schema registered, but arrow bindings use center anchors)
+- `@ocif/inherit`, `@ocif/global-positions`, `rootNode`, `rotationAxis`, non-uniform `scale`
 
 ### tldraw-specific extensions
 
